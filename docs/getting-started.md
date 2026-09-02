@@ -105,6 +105,42 @@ The total includes deliveries already handed to a consumer, so it stays high
 while a consumer works through a batch and tells you nothing about whether the
 queue is draining.
 
+## Check your permissions at startup
+
+```java
+CurrentUser me = admin.whoami();
+
+System.out.println(me.name() + " " + me.tags());   // guest [administrator]
+
+if (!me.canAdminister()) {
+    throw new IllegalStateException(me.name() + " cannot change anything through the"
+            + " management API: it needs the administrator tag");
+}
+```
+
+Worth doing once, at startup. Every permission problem otherwise surfaces later
+as a 401 or 403 on some unrelated-looking call, and "this user has no
+administrator tag" is a much better thing to report than "could not create
+vhost" an hour into a provisioning run.
+
+## Upgrade readiness
+
+```java
+admin.deprecatedFeaturesInUse().forEach(f ->
+        System.out.println(f.name() + "  " + f.deprecationPhase()));
+
+admin.featureFlags().stream()
+        .filter(FeatureFlagInfo::isRequired)
+        .filter(f -> !f.isEnabled())
+        .forEach(f -> System.out.println("blocks the next upgrade: " + f.name()));
+```
+
+Both lists should be empty before a major upgrade. A required feature flag left
+disabled will stop the upgrade; a deprecated feature in use will stop working
+during it. RabbitMQ 4 already *denies* transient non-exclusive queues, which
+means a client declaring one has its connection closed with an internal error
+rather than a warning.
+
 ## Choosing a vhost
 
 Every call is scoped to one vhost, `/` by default:

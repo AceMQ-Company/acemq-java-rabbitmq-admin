@@ -42,7 +42,9 @@ Now the part that is usually done wrong. The management UI's default button
 grants `.*` on all three, which is every resource in the vhost.
 
 ```java
-admin.grant("billing-service", "billing",
+RabbitAdmin billing = admin.forVhost("billing");
+
+billing.grant("billing-service",
         "^billing\\..*",     // configure: may declare these
         "^billing\\..*",     // write:     may publish to these
         "^billing\\..*");    // read:      may consume from these
@@ -51,6 +53,10 @@ admin.grant("billing-service", "billing",
 The order is **configure, write, read** — RabbitMQ's own order. They are regular
 expressions matched against *resource names*, not against actions, and an empty
 string means "nothing", not "everything".
+
+Note there is no vhost argument: the permission is granted in the vhost the
+client is pointed at. Calling `grant` on `admin` here — still pointed at `/` —
+would permission the default vhost instead, and succeed while doing it.
 
 Check what you actually created:
 
@@ -78,12 +84,10 @@ That is the one an audit will find. On a real broker, `guest` should not exist.
 
 ## Step 4 — A policy
 
-Switch to the new vhost. `forVhost` returns a new view; it does not modify the
-original.
+Reusing the `billing` view from the last step — `forVhost` returns a new client
+over the same connection and does not modify the original.
 
 ```java
-RabbitAdmin billing = admin.forVhost("billing");
-
 billing.putPolicy("billing-ttl", "^billing\\.",
         Map.of("message-ttl", 86_400_000),   // 24 hours
         10);

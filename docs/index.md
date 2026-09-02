@@ -29,7 +29,7 @@ reason the split exists.
 
 ## What it is for
 
-**[Reading real queue state](queues.md).** AMQP has no way to read a queue's
+**[Reading and writing topology](queues.md).** AMQP has no way to read a queue's
 arguments back. A passive declare tells you a queue exists; a real declare tells
 you whether *your* arguments match, by refusing. Neither tells you what the
 queue actually is. This does.
@@ -41,9 +41,20 @@ be reviewed.
 **[Federation and shovels](federation.md).** Configured through this API and
 nowhere else, and the mechanism behind blue/green broker migration.
 
+**[Connections, channels and consumers](connections.md).** Which client is doing
+this, and the ability to disconnect one.
+
+**[Health checks](health.md).** The broker's own answers, including two things
+no metric can tell you: whether a quorum queue would survive losing another
+node, and when your TLS certificates expire.
+
 **[Metrics](metrics.md) and [alerts](alerts.md).** How many messages are waiting
 in *this* queue, and rules that are evaluated in-process and exported as
 Prometheus alerting YAML from one definition.
+
+**[Backup and restore](backup.md).** The whole broker's configuration as one
+document — including the federation upstreams and shovels that a topology export
+silently misses.
 
 ## What it will not do
 

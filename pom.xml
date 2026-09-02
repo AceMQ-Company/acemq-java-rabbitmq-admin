@@ -63,6 +63,7 @@
     <junit.version>5.11.4</junit.version>
     <assertj.version>3.27.7</assertj.version>
     <testcontainers.version>1.21.4</testcontainers.version>
+    <amqp.client.version>5.25.0</amqp.client.version>
   </properties>
 
   <dependencies>
@@ -104,6 +105,16 @@
       <groupId>org.testcontainers</groupId>
       <artifactId>junit-jupiter</artifactId>
       <version>${testcontainers.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <!-- Test scope only, and it must stay that way: this library does not speak
+         AMQP and gains no dependency on a client. It is here because connections,
+         channels and consumers cannot be tested without something connecting, and
+         a test that asserted an empty list would pass against a broken client. -->
+    <dependency>
+      <groupId>com.rabbitmq</groupId>
+      <artifactId>amqp-client</artifactId>
+      <version>${amqp.client.version}</version>
       <scope>test</scope>
     </dependency>
   </dependencies>

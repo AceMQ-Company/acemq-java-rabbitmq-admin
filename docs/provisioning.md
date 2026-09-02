@@ -22,14 +22,20 @@ production vhost as on an empty test one.
 ## Users and permissions
 
 ```java
-admin.createUser("orders-service", "a-real-password", "monitoring");
-admin.grant("orders-service", "billing", "^orders\\..*", "^orders\\..*", "^orders\\..*");
+RabbitAdmin billing = admin.forVhost("billing");
+
+billing.createUser("orders-service", "a-real-password", "monitoring");
+billing.grant("orders-service", "^orders\\..*", "^orders\\..*", "^orders\\..*");
 ```
 
-`grant(user, vhost, configure, write, read)` takes three regular expressions,
-and their order is the order RabbitMQ documents: **configure, write, read**.
-They are matched against resource names, not against actions, and an empty
-string means "nothing" rather than "everything".
+`grant(user, configure, write, read)` takes three regular expressions, and their
+order is the order RabbitMQ documents: **configure, write, read**. They are
+matched against resource names, not against actions, and an empty string means
+"nothing" rather than "everything".
+
+The virtual host is the connection's, not an argument — which is why the grant
+above goes through `forVhost("billing")`. Calling `grant` on a client still
+pointed at `/` silently permissions the wrong vhost, and it succeeds.
 
 ```java
 for (PermissionInfo p : admin.permissions()) {
@@ -97,6 +103,68 @@ for (PolicyInfo p : admin.policies()) {
 Only one policy applies to a given queue: the matching one with the highest
 `priority()`. They do not merge. Two policies that each set half of what you
 want will not combine into the whole of it.
+
+## Operator policies
+
+A second policy list, with a different purpose: where both apply, **the operator
+policy wins**. These are the guard rails a platform team sets and a tenant
+cannot override.
+
+```java
+admin.putOperatorPolicy("cap-queue-length", "^tenant\\.",
+        Map.of("max-length", 100_000), 1);
+
+admin.operatorPolicies().forEach(p -> System.out.println(p.name()));
+```
+
+They are a separate list, so an audit that reads only `policies()` does not see
+them — and a team wondering why their `max-length` is being ignored is usually
+looking at the wrong list.
+
+## Limits
+
+The controls that stop one application taking a broker down for everybody:
+
+```java
+admin.setVhostLimit(LimitInfo.MAX_CONNECTIONS, 500);
+admin.setVhostLimit(LimitInfo.MAX_QUEUES, 200);
+
+admin.setUserLimit("orders-service", "max-connections", 50);
+```
+
+A connection leak that would otherwise reach the node's file descriptor limit
+stops at 500 instead, affecting one vhost rather than the broker.
+
+```java
+admin.vhostLimits().forEach(l ->
+        System.out.println(l.vhost() + " " + l.value()));
+
+admin.clearVhostLimit(LimitInfo.MAX_CONNECTIONS);
+```
+
+The broker returns these as a map, because a vhost can carry several at once.
+
+## Topic permissions
+
+A third permission surface, separate from `grant`. Regular permissions control
+which **resources** a user may touch; topic permissions control which **routing
+keys** they may publish or subscribe to on a topic exchange.
+
+```java
+admin.grantTopic("orders-service", "amq.topic", "^orders\\..*", "^orders\\..*");
+```
+
+The trap is the default:
+
+```java
+admin.topicPermissions();     // []
+```
+
+**A user with no topic permissions is unrestricted on topic exchanges.** An
+empty list does not mean locked down, it means nothing is being enforced —
+however careful the ordinary permissions are. Granting one is what starts
+enforcement, and `revokeTopic` restores unrestricted access rather than removing
+it.
 
 ## Applying a plan rather than a script
 

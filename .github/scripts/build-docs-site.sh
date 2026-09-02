@@ -93,8 +93,11 @@ NAV='<nav class="top">
   <a href="queues.html">Queues</a>
   <a href="provisioning.html">Provisioning</a>
   <a href="federation.html">Federation</a>
+  <a href="connections.html">Connections</a>
+  <a href="health.html">Health</a>
   <a href="metrics.html">Metrics</a>
   <a href="alerts.html">Alerts</a>
+  <a href="backup.html">Backup</a>
   <a class="tutorials" href="tutorials.html">Tutorials</a>
   <a class="api" href="apidocs/index.html">API reference</a>
   <a class="enterprise" href="https://acemq.com">Enterprise support</a>

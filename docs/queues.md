@@ -102,6 +102,62 @@ detail is here because it will bite you if you build URLs yourself.
 path: a queue named `dead letters` would be looked up as `dead+letters` and
 reported missing. Path segments are percent-encoded here, not form-encoded.
 
+## Declaring and deleting
+
+AMQP can declare a queue, and usually should: a queue an application depends on
+is best declared by that application at startup, so it exists before the first
+publish. These exist for the cases AMQP cannot serve — provisioning for a team
+that has not deployed yet, or restoring from a backup.
+
+```java
+admin.declareQueue("orders.new", true, Map.of("x-message-ttl", 60000));
+admin.declareExchange("dlx", "topic", true, Map.of());
+admin.bindQueue("dlx", "orders.new", "orders.#", Map.of());
+```
+
+Both declares are idempotent in the same way `PUT` is: running the code twice
+succeeds twice.
+
+```java
+admin.deleteQueue("orders.new");     // with everything in it
+admin.deleteExchange("dlx");         // and its bindings
+```
+
+### Purging
+
+```java
+admin.purgeQueue("orders.dlq");
+```
+
+Discards every message and keeps the queue. Irreversible, with no confirmation.
+It is genuinely right for a dead-letter queue whose contents have been analysed
+and cannot be replayed, and it is exactly as fast on a queue holding something
+important.
+
+### Unbinding takes the binding, not a routing key
+
+```java
+BindingInfo binding = admin.bindingsForQueue("orders.new").stream()
+        .filter(b -> !b.isDefaultExchangeBinding())
+        .findFirst()
+        .orElseThrow();
+
+admin.unbind(binding);
+```
+
+A binding has no name. Several may join the same pair of objects with different
+routing keys, so the broker identifies one by a `properties_key` — and **that
+key arrives already percent-encoded**. A routing key of `a.#` has a properties
+key of `a.%23`, which belongs in the URL exactly as given; encoding it again
+produces `a.%2523` and matches nothing.
+
+That is why `unbind` takes the whole object. Reconstructing the key correctly is
+not something a caller should have to know about, and getting it wrong produces
+a 404 that looks like a binding which was already gone.
+
+The default-exchange binding is refused rather than attempted — the broker
+maintains it, and it exists for as long as the queue does.
+
 ## Errors
 
 | Situation | What you get |

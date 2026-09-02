@@ -518,6 +518,456 @@ public final class RabbitAdmin implements AutoCloseable {
         delete("/api/parameters/" + encode(component) + "/" + encode(vhost) + "/" + encode(name));
     }
 
+    // ---------------------------------------------------------------- health
+
+    /**
+     * The broker's own health checks.
+     *
+     * <pre>{@code
+     * if (!admin.health().isHealthy()) {
+     *     admin.health().failures().forEach(f -> log.error("{}", f));
+     * }
+     * }</pre>
+     *
+     * @return a view over {@code /api/health/checks/}
+     */
+    public Health health() {
+        return new Health(this::healthCheck);
+    }
+
+    // ----------------------------------------------------------- definitions
+
+    /**
+     * Exports everything the broker is configured to be.
+     *
+     * <p>Queues, exchanges, bindings, vhosts, users, permissions, topic permissions, policies
+     * and runtime parameters, in one request. This is the backup: assembling one by walking the
+     * topology misses federation upstreams and shovels, which are parameters, and the restored
+     * broker looks complete while federating nothing.
+     *
+     * <p><strong>No messages.</strong> This is configuration only.
+     *
+     * @return the definitions, with the broker's own JSON kept verbatim
+     */
+    public Definitions exportDefinitions() {
+        String body = get("/api/definitions")
+                .orElseThrow(() -> new AdminException("the broker returned no definitions"));
+        return new Definitions(body, readMap(body, "definitions"));
+    }
+
+    /**
+     * @return the definitions for the current virtual host alone, which omits the cluster-wide
+     *     sections — users, permissions and global parameters are not scoped to a vhost
+     */
+    public Definitions exportVhostDefinitions() {
+        String path = "/api/definitions/" + encode(vhost);
+        String body = get(path)
+                .orElseThrow(() -> new AdminException("no definitions for vhost '" + vhost + "'"));
+        return new Definitions(body, readMap(body, "definitions for " + vhost));
+    }
+
+    /**
+     * Applies a definitions document to this broker.
+     *
+     * <p><strong>This is a merge, not a replacement.</strong> Everything in the document is
+     * created or updated; nothing absent from it is removed. Importing an old backup therefore
+     * restores what was lost without deleting what has been added since — which is usually what
+     * is wanted, and is not what "restore" sounds like.
+     *
+     * <p>Users in a definitions file carry password hashes rather than passwords, so importing
+     * one recreates accounts that accept the original passwords. Treat the file as a credential.
+     *
+     * @param json a definitions document, as produced by {@link #exportDefinitions()}
+     */
+    public void importDefinitions(String json) {
+        Objects.requireNonNull(json, "json");
+        post("/api/definitions", json);
+    }
+
+    // ------------------------------------------------- connections and their traffic
+
+    /** @return every client connection to the broker, across all virtual hosts */
+    public List<ConnectionInfo> connections() {
+        return get("/api/connections")
+                .map(body -> readList(body, new TypeReference<List<ConnectionInfo>>() { }, "connections"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * @param name the broker's name for the connection, from {@link ConnectionInfo#name()}
+     * @return it, or empty if it has since closed
+     */
+    public Optional<ConnectionInfo> connection(String name) {
+        return get("/api/connections/" + encode(Objects.requireNonNull(name, "name")))
+                .map(body -> read(body, ConnectionInfo.class, "connection " + name));
+    }
+
+    /**
+     * Closes a client connection.
+     *
+     * <p>The client sees a connection closed by the broker, with the reason given. A well-built
+     * client will reconnect immediately, which makes this a way to force a reconnection — to
+     * move a client off a node before maintenance, for instance — rather than a way to keep
+     * something disconnected.
+     *
+     * @param name from {@link ConnectionInfo#name()}
+     * @param reason told to the client, and worth making specific
+     */
+    public void closeConnection(String name, String reason) {
+        deleteWithReason("/api/connections/" + encode(Objects.requireNonNull(name, "name")), reason);
+    }
+
+    /** @return every open channel, across all connections */
+    public List<ChannelInfo> channels() {
+        return get("/api/channels")
+                .map(body -> readList(body, new TypeReference<List<ChannelInfo>>() { }, "channels"))
+                .orElse(Collections.emptyList());
+    }
+
+    /** @return every consumer in the current virtual host, with the queue each is attached to */
+    public List<ConsumerInfo> consumers() {
+        return get("/api/consumers/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<ConsumerInfo>>() { }, "consumers"))
+                .orElse(Collections.emptyList());
+    }
+
+    // --------------------------------------------------------- topology writes
+
+    /**
+     * Declares a queue.
+     *
+     * <p>Note that AMQP can do this, and usually should: a queue an application depends on is
+     * best declared by that application, at startup, so it exists before the first publish.
+     * This exists for the cases AMQP cannot serve — provisioning a queue for a team that has
+     * not deployed yet, or restoring one from a backup.
+     *
+     * @param name the queue
+     * @param durable whether it survives a broker restart
+     * @param arguments queue arguments, or an empty map
+     */
+    public void declareQueue(String name, boolean durable, Map<String, Object> arguments) {
+        Objects.requireNonNull(name, "name");
+        put("/api/queues/" + encode(vhost) + "/" + encode(name),
+                body(mapOf("durable", durable, "auto_delete", false,
+                        "arguments", arguments == null ? Collections.emptyMap() : arguments),
+                        "queue " + name));
+    }
+
+    /**
+     * @param name the queue to delete, with everything in it
+     */
+    public void deleteQueue(String name) {
+        delete("/api/queues/" + encode(vhost) + "/" + encode(Objects.requireNonNull(name, "name")));
+    }
+
+    /**
+     * Discards every message in a queue, keeping the queue.
+     *
+     * <p>Irreversible, and there is no confirmation. It is genuinely the right tool for a
+     * dead-letter queue full of messages that have been analysed and cannot be replayed — and
+     * it is exactly as fast on a queue holding something important.
+     *
+     * @param name the queue to empty
+     */
+    public void purgeQueue(String name) {
+        delete("/api/queues/" + encode(vhost) + "/"
+                + encode(Objects.requireNonNull(name, "name")) + "/contents");
+    }
+
+    /**
+     * @param name the exchange
+     * @param type {@code direct}, {@code topic}, {@code fanout} or {@code headers}
+     * @param durable whether it survives a broker restart
+     * @param arguments exchange arguments, or an empty map
+     */
+    public void declareExchange(String name, String type, boolean durable,
+            Map<String, Object> arguments) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(type, "type");
+        put("/api/exchanges/" + encode(vhost) + "/" + encode(name),
+                body(mapOf("type", type, "durable", durable, "auto_delete", false,
+                        "internal", false,
+                        "arguments", arguments == null ? Collections.emptyMap() : arguments),
+                        "exchange " + name));
+    }
+
+    /** @param name the exchange to delete. Its bindings go with it */
+    public void deleteExchange(String name) {
+        delete("/api/exchanges/" + encode(vhost) + "/" + encode(Objects.requireNonNull(name, "name")));
+    }
+
+    /**
+     * Binds a queue to an exchange.
+     *
+     * @param source the exchange
+     * @param queue the queue
+     * @param routingKey the routing key or pattern
+     * @param arguments binding arguments, which is where a headers exchange keeps its rules
+     */
+    public void bindQueue(String source, String queue, String routingKey,
+            Map<String, Object> arguments) {
+        bind(source, "q", queue, routingKey, arguments);
+    }
+
+    /**
+     * Binds an exchange to another exchange.
+     *
+     * @param source the upstream exchange
+     * @param destination the downstream exchange
+     * @param routingKey the routing key or pattern
+     * @param arguments binding arguments
+     */
+    public void bindExchange(String source, String destination, String routingKey,
+            Map<String, Object> arguments) {
+        bind(source, "e", destination, routingKey, arguments);
+    }
+
+    private void bind(String source, String kind, String destination, String routingKey,
+            Map<String, Object> arguments) {
+        Objects.requireNonNull(source, "source");
+        Objects.requireNonNull(destination, "destination");
+        post("/api/bindings/" + encode(vhost) + "/e/" + encode(source)
+                        + "/" + kind + "/" + encode(destination),
+                body(mapOf("routing_key", routingKey == null ? "" : routingKey,
+                        "arguments", arguments == null ? Collections.emptyMap() : arguments),
+                        "binding " + source + " -> " + destination));
+    }
+
+    /**
+     * Removes a binding.
+     *
+     * <p>Takes the whole {@link BindingInfo} rather than a routing key because a binding is
+     * identified by its {@linkplain BindingInfo#propertiesKey() properties key}, which arrives
+     * already percent-encoded and must not be encoded again.
+     *
+     * @param binding one returned by {@link #bindings()} or {@link #bindingsForQueue(String)}
+     */
+    public void unbind(BindingInfo binding) {
+        Objects.requireNonNull(binding, "binding");
+        if (binding.isDefaultExchangeBinding()) {
+            throw new IllegalArgumentException("the default-exchange binding for '"
+                    + binding.destination() + "' cannot be removed: the broker maintains it, and"
+                    + " it exists for as long as the queue does");
+        }
+        if (binding.propertiesKey() == null) {
+            throw new IllegalArgumentException("this binding has no properties key, so the broker"
+                    + " cannot be told which binding to remove. Read it back with bindings() first.");
+        }
+        String kind = "exchange".equals(binding.destinationType()) ? "e" : "q";
+        // propertiesKey is inserted verbatim: the broker sends it already encoded, and
+        // encoding it again turns "a.%23" into "a.%2523", which matches no binding.
+        delete("/api/bindings/" + encode(binding.vhost()) + "/e/" + encode(binding.source())
+                + "/" + kind + "/" + encode(binding.destination())
+                + "/" + binding.propertiesKey());
+    }
+
+    // ------------------------------------------------------- operator policies
+
+    /**
+     * Policies an operator sets and a user cannot override.
+     *
+     * <p>Same shape as {@link #policies()} and a different purpose: where both apply, the
+     * operator policy wins. These are the guard rails — a maximum queue length across a shared
+     * broker, say — that survive a team applying its own policy.
+     *
+     * @return every operator policy in the current virtual host
+     */
+    public List<PolicyInfo> operatorPolicies() {
+        return get("/api/operator-policies/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<PolicyInfo>>() { }, "operator policies"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * @param name the policy name
+     * @param pattern a regular expression matched against queue or exchange names
+     * @param definition the settings to apply
+     * @param priority higher wins among matching operator policies
+     */
+    public void putOperatorPolicy(String name, String pattern, Map<String, Object> definition,
+            int priority) {
+        Objects.requireNonNull(name, "name");
+        put("/api/operator-policies/" + encode(vhost) + "/" + encode(name),
+                body(mapOf("pattern", pattern, "definition", definition,
+                        "priority", priority, "apply-to", "queues"),
+                        "operator policy " + name));
+    }
+
+    /** @param name the operator policy to remove */
+    public void deleteOperatorPolicy(String name) {
+        delete("/api/operator-policies/" + encode(vhost) + "/"
+                + encode(Objects.requireNonNull(name, "name")));
+    }
+
+    // ------------------------------------------------------------------ limits
+
+    /** @return the limits set on every virtual host */
+    public List<LimitInfo> vhostLimits() {
+        return get("/api/vhost-limits")
+                .map(body -> readList(body, new TypeReference<List<LimitInfo>>() { }, "vhost limits"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * @param limit {@link LimitInfo#MAX_CONNECTIONS} or {@link LimitInfo#MAX_QUEUES}
+     * @param value the ceiling
+     */
+    public void setVhostLimit(String limit, long value) {
+        Objects.requireNonNull(limit, "limit");
+        put("/api/vhost-limits/" + encode(vhost) + "/" + encode(limit),
+                "{\"value\":" + value + "}");
+    }
+
+    /** @param limit the limit to remove, restoring "no limit" */
+    public void clearVhostLimit(String limit) {
+        delete("/api/vhost-limits/" + encode(vhost) + "/"
+                + encode(Objects.requireNonNull(limit, "limit")));
+    }
+
+    /** @return the limits set on every user */
+    public List<LimitInfo> userLimits() {
+        return get("/api/user-limits")
+                .map(body -> readList(body, new TypeReference<List<LimitInfo>>() { }, "user limits"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * @param user the user
+     * @param limit {@code max-connections} or {@code max-channels}
+     * @param value the ceiling
+     */
+    public void setUserLimit(String user, String limit, long value) {
+        Objects.requireNonNull(user, "user");
+        Objects.requireNonNull(limit, "limit");
+        put("/api/user-limits/" + encode(user) + "/" + encode(limit), "{\"value\":" + value + "}");
+    }
+
+    /**
+     * @param user the user
+     * @param limit the limit to remove
+     */
+    public void clearUserLimit(String user, String limit) {
+        delete("/api/user-limits/" + encode(Objects.requireNonNull(user, "user")) + "/"
+                + encode(Objects.requireNonNull(limit, "limit")));
+    }
+
+    // -------------------------------------------------------- topic permissions
+
+    /**
+     * Routing-key authorisation on topic exchanges.
+     *
+     * <p>Separate from {@link #permissions()}, and easy to miss: a user with no topic
+     * permissions is <em>unrestricted</em> on topic exchanges. An empty list here means nothing
+     * is being enforced, however carefully the ordinary permissions are set.
+     *
+     * @return every topic permission on the broker
+     */
+    public List<TopicPermissionInfo> topicPermissions() {
+        return get("/api/topic-permissions")
+                .map(body -> readList(body, new TypeReference<List<TopicPermissionInfo>>() { },
+                        "topic permissions"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * @param user the user
+     * @param exchange the topic exchange
+     * @param write a routing-key pattern this user may publish with
+     * @param read a routing-key pattern this user may bind and consume with
+     */
+    public void grantTopic(String user, String exchange, String write, String read) {
+        Objects.requireNonNull(user, "user");
+        put("/api/topic-permissions/" + encode(vhost) + "/" + encode(user),
+                body(mapOf("exchange", exchange, "write", write, "read", read),
+                        "topic permission for " + user));
+    }
+
+    /**
+     * @param user the user whose topic permissions in this virtual host are removed, which
+     *     restores unrestricted access rather than removing it
+     */
+    public void revokeTopic(String user) {
+        delete("/api/topic-permissions/" + encode(vhost) + "/"
+                + encode(Objects.requireNonNull(user, "user")));
+    }
+
+    // ------------------------------------------------------- cluster and upgrade
+
+    /**
+     * @return the user these credentials belong to, and its tags. Worth calling at startup: a
+     *     missing tag reported here is far easier to act on than the 403 it becomes later
+     */
+    public CurrentUser whoami() {
+        String body = get("/api/whoami")
+                .orElseThrow(() -> new AdminException("the broker did not answer /api/whoami"));
+        return read(body, CurrentUser.class, "whoami");
+    }
+
+    /** @return every node in the cluster */
+    public List<NodeInfo> nodes() {
+        return get("/api/nodes")
+                .map(body -> readList(body, new TypeReference<List<NodeInfo>>() { }, "nodes"))
+                .orElse(Collections.emptyList());
+    }
+
+    /** @return the cluster's name */
+    public String clusterName() {
+        return get("/api/cluster-name")
+                .map(body -> String.valueOf(readMap(body, "cluster name").get("name")))
+                .orElse("");
+    }
+
+    /**
+     * @return every feature flag and its state. A flag whose stability is {@code required} and
+     *     whose state is not {@code enabled} will block the next major upgrade
+     */
+    public List<FeatureFlagInfo> featureFlags() {
+        return get("/api/feature-flags")
+                .map(body -> readList(body, new TypeReference<List<FeatureFlagInfo>>() { }, "feature flags"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * @return the deprecated features this broker is <em>actually using</em>. The upgrade
+     *     readiness list: everything on it stops working at some future version, and an empty
+     *     list is the answer you want before upgrading
+     */
+    public List<DeprecatedFeatureInfo> deprecatedFeaturesInUse() {
+        return get("/api/deprecated-features/used")
+                .map(body -> readList(body, new TypeReference<List<DeprecatedFeatureInfo>>() { },
+                        "deprecated features in use"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * @return the cluster-wide parameters, which are not scoped to a virtual host. These use
+     *     {@link GlobalParameterInfo} rather than {@link ParameterInfo} because their values are
+     *     not objects: {@code internal_cluster_id} is a string and {@code cluster_tags} is an
+     *     array, and every broker has both
+     */
+    public List<GlobalParameterInfo> globalParameters() {
+        return get("/api/global-parameters")
+                .map(body -> readList(body, new TypeReference<List<GlobalParameterInfo>>() { },
+                        "global parameters"))
+                .orElse(Collections.emptyList());
+    }
+
+    private static Map<String, Object> mapOf(Object... pairs) {
+        Map<String, Object> map = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < pairs.length; i += 2) {
+            map.put(String.valueOf(pairs[i]), pairs[i + 1]);
+        }
+        return map;
+    }
+
+    private String body(Map<String, Object> value, String what) {
+        try {
+            return json.writeValueAsString(value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AdminException("could not encode the request body for " + what, e);
+        }
+    }
+
     private Optional<String> get(String path) {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(baseUri.resolve(path))
@@ -575,6 +1025,81 @@ public final class RabbitAdmin implements AutoCloseable {
                 .header("Content-Type", "application/json")
                 .PUT(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
                 .build(), path);
+    }
+
+    private void post(String path, String body) {
+        send(HttpRequest.newBuilder()
+                .uri(baseUri.resolve(path))
+                .timeout(timeout)
+                .header("Authorization", authorization)
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .build(), path);
+    }
+
+    private void deleteWithReason(String path, String reason) {
+        send(HttpRequest.newBuilder()
+                .uri(baseUri.resolve(path))
+                .timeout(timeout)
+                .header("Authorization", authorization)
+                // The broker passes this to the client as the connection-close reason, so
+                // whoever gets disconnected is told why rather than seeing an unexplained drop.
+                .header("X-Reason", reason == null ? "closed by acemq-java-rabbitmq-admin" : reason)
+                .DELETE()
+                .build(), path);
+    }
+
+    /**
+     * Runs one health check.
+     *
+     * <p>Separate from {@link #get(String)} because a failing check answers <strong>503</strong>,
+     * and that is the check working rather than the request failing. Routed through the ordinary
+     * reader, a broker with an alarm in effect would raise an exception instead of reporting
+     * that it has an alarm in effect.
+     */
+    private HealthResult healthCheck(String check) {
+        String path = "/api/health/checks/" + check;
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(baseUri.resolve(path))
+                .timeout(timeout)
+                .header("Authorization", authorization)
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+        HttpResponse<String> response;
+        try {
+            response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new AdminException("could not reach the management API at " + baseUri
+                    + " for health check '" + check + "'", e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AdminException("interrupted while calling " + path, e);
+        }
+
+        int status = response.statusCode();
+        if (status == 401 || status == 403) {
+            throw new AdminException("the management API rejected these credentials for health"
+                    + " check '" + check + "'. The user needs the monitoring or administrator tag.");
+        }
+        if (status == 404) {
+            throw new AdminException("this broker has no health check called '" + check + "'."
+                    + " The checks under /api/health/checks/ vary by RabbitMQ version.");
+        }
+        if (status != 200 && status != 503) {
+            throw new AdminException("the management API answered " + status + " for health check '"
+                    + check + "': " + abbreviate(response.body()));
+        }
+
+        Map<String, Object> body = readMap(response.body(), "health check " + check);
+        Object reason = body.get("reason");
+        return new HealthResult(check, status == 200,
+                reason == null ? null : reason.toString(), body);
+    }
+
+    private Map<String, Object> readMap(String body, String what) {
+        return readList(body, new TypeReference<Map<String, Object>>() { }, what);
     }
 
     private void delete(String path) {

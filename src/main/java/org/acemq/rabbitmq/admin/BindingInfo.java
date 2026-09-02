@@ -38,6 +38,7 @@ public final class BindingInfo {
     private final String destinationType;
     private final String routingKey;
     private final Map<String, Object> arguments;
+    private final String propertiesKey;
 
     public BindingInfo(
             @JsonProperty("source") String source,
@@ -45,7 +46,9 @@ public final class BindingInfo {
             @JsonProperty("destination") String destination,
             @JsonProperty("destination_type") String destinationType,
             @JsonProperty("routing_key") String routingKey,
-            @JsonProperty("arguments") Map<String, Object> arguments) {
+            @JsonProperty("arguments") Map<String, Object> arguments,
+            @JsonProperty("properties_key") String propertiesKey) {
+        this.propertiesKey = propertiesKey;
         this.source = source == null ? "" : source;
         this.vhost = vhost;
         this.destination = destination;
@@ -92,6 +95,25 @@ public final class BindingInfo {
     /** @return whether this is the unremovable default-exchange binding rather than a real one */
     public boolean isDefaultExchangeBinding() {
         return source.isEmpty();
+    }
+
+    /**
+     * The broker's identifier for this binding, needed to delete it.
+     *
+     * <p>A binding has no name. Several may join the same pair of objects with different routing
+     * keys and arguments, so the delete URL identifies one by this key rather than by anything
+     * a caller chose.
+     *
+     * <p><strong>It arrives already percent-encoded.</strong> A routing key of {@code a.#} has a
+     * properties key of {@code a.%23}, and it belongs in the URL exactly as given — encoding it
+     * again produces {@code a.%2523}, which matches nothing and 404s. This is why
+     * {@link RabbitAdmin#unbind(BindingInfo)} takes the whole object rather than a routing key:
+     * reconstructing this string correctly is not something a caller should have to know about.
+     *
+     * @return the properties key, or null if the broker did not send one
+     */
+    public String propertiesKey() {
+        return propertiesKey;
     }
 
     @Override

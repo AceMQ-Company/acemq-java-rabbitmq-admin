@@ -3,9 +3,10 @@
 RabbitMQ's **HTTP management API** for Java: users, vhosts, permissions,
 policies, federation, shovels — and the queue facts AMQP will not tell you.
 
-> **Status: working, unreleased.** Queues, exchanges, bindings, vhosts, users,
-> permissions, policies and shovels are implemented and tested against a real
-> broker. Nothing is published anywhere yet. See
+> **Status: working, unreleased.** Topology, provisioning, federation and
+> shovels, health checks, connections, metrics, alerts and definitions
+> export/import are implemented and tested against a real broker — 41 unit tests
+> and 57 integration tests. Nothing is published anywhere yet. See
 > [what it will not do](#what-it-will-not-do) for the boundaries.
 
 ```java
@@ -34,7 +35,7 @@ that stays enforced rather than merely intended.
 
 ## What it is for
 
-Four things, in the order they are worth building.
+Six things, in the order they are worth building.
 
 ### 1. The questions AMQP cannot answer
 
@@ -111,6 +112,44 @@ every normal burst until somebody mutes it, taking the one real occurrence with
 it. `queueNotDraining()` requires depth *and* zero consumers, which is never
 normal.
 
+### 5. Health, and who is connected
+
+The broker's own health checks, rather than health inferred from gauges:
+
+```java
+if (!admin.health().isHealthy()) {
+    admin.health().failures().forEach(f -> log.error("{}", f));
+}
+admin.health().quorumCritical().orThrow();   // before continuing a rolling restart
+```
+
+Two of these have no metric equivalent at all: whether a quorum queue would lose
+its majority if one more node went away, and when a TLS certificate expires.
+
+A failing check answers HTTP 503, which is the check working — so it is a value,
+not an exception. Routed through the ordinary reader, "is the broker healthy?"
+could never be answered with *no*.
+
+`connections()`, `channels()` and `consumers()` answer "which client is doing
+this", and `closeConnection(name, reason)` disconnects one. A channel holding its
+entire prefetch unacknowledged is a consumer that has stopped, and from the
+queue's side that is indistinguishable from one that is merely slow.
+
+### 6. Backup
+
+```java
+Files.writeString(Path.of("broker.json"), admin.exportDefinitions().json());
+```
+
+The whole configuration in one document — including federation upstreams and
+shovels, which are runtime parameters and which a topology export assembled from
+queues, exchanges and bindings silently omits.
+
+Importing is a **merge**, not a replacement: everything in the file is restored,
+nothing absent from it is deleted. And the file is a credential — users carry
+password hashes, which is enough to stand up a broker their passwords work
+against.
+
 ## What it will not do
 
 - **It will not become a second message path.** No publishing, no consuming.
@@ -124,7 +163,7 @@ normal.
   there would need this, the feature is either redesigned or documented as
   absent. That rule is the reason the split exists.
 
-## Six things the broker taught us
+## Eight things the broker taught us
 
 Each cost a test failure first, and each is the sort of thing that is obvious
 afterwards and invisible before.
@@ -157,6 +196,17 @@ real signals are `rabbitmq_alarms_memory_used_watermark` and
 that every metric named by a shipped rule exists on a running broker, because a
 wrong metric name is not a compile error and not a test failure — it is silence,
 which is exactly what a working alert looks like.
+
+**A health check answers 503 when it fails.** That is the check working, not the
+request failing. Read through the ordinary path it becomes an exception, and
+`isHealthy()` can only ever return true or throw — so the one answer the method
+exists to give is the one it cannot give.
+
+**A binding's `properties_key` arrives already percent-encoded.** A routing key
+of `a.#` has a properties key of `a.%23`, which goes into the delete URL exactly
+as received. Encoding it again yields `a.%2523`, which matches nothing and 404s
+— indistinguishable from a binding that was already removed. This is why
+`unbind` takes the whole `BindingInfo`.
 
 **`Double.parseDouble("NaN")` succeeds.** The parser skipped malformed values by
 catching `NumberFormatException`, which covers `+Inf` (Java wants `Infinity`) but

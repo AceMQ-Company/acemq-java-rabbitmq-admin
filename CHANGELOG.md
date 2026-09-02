@@ -79,6 +79,43 @@ reasons.
   tag. Reporting bad credentials as "no queue" would send somebody looking in
   entirely the wrong place.
 
+- **Health checks** — `health()` over the twelve `/api/health/checks/` endpoints.
+  A failing check answers HTTP 503, which is the check working rather than the
+  request failing, so `HealthResult` is a value and not an exception;
+  `orThrow()` is there when an exception is what you want. Two of these have no
+  metric equivalent: `quorumCritical()`, which decides whether a rolling restart
+  may continue, and `certificateExpiration(...)`. `checkAll()` and `failures()`
+  deliberately use the node-local checks, because a load balancer probing the
+  cluster-wide ones takes every node out of rotation at once.
+- **`exportDefinitions()` / `importDefinitions(...)`** — the whole broker's
+  configuration in one document, including the runtime parameters that carry
+  federation upstreams and shovels. A backup assembled by walking queues,
+  exchanges and bindings omits those, and the restored broker looks complete
+  while federating nothing. Import is a **merge**: everything in the file is
+  applied, nothing absent from it is removed.
+- **`connections()`, `channels()`, `consumers()`, `closeConnection(...)`** —
+  which client is doing this, and the ability to disconnect one with a reason
+  the client is told. `ChannelInfo.isAtPrefetchLimit()` distinguishes a consumer
+  that has stopped from one that is slow, which the queue's own counters cannot.
+- **Topology writes**: `declareQueue`, `deleteQueue`, `purgeQueue`,
+  `declareExchange`, `deleteExchange`, `bindQueue`, `bindExchange`, `unbind`.
+  `unbind` takes a `BindingInfo` rather than a routing key because a binding is
+  identified by a `properties_key` that arrives already percent-encoded, and
+  encoding it again produces a 404 that looks like a binding already removed.
+- **Operator policies, vhost and user limits, topic permissions** — the controls
+  a tenant cannot override, the ceilings that stop one application exhausting a
+  broker, and the third permission surface. A user with **no** topic permissions
+  is unrestricted on topic exchanges, so an empty list means nothing is being
+  enforced rather than everything being locked down.
+- **`whoami()`, `nodes()`, `clusterName()`, `featureFlags()`,
+  `deprecatedFeaturesInUse()`, `globalParameters()`** — `whoami()` at startup
+  turns a later 403 into a clear message; the feature-flag and deprecated-feature
+  lists are upgrade readiness. `GlobalParameterInfo` exists separately from
+  `ParameterInfo` because a global parameter's value is not an object:
+  `internal_cluster_id` is a string and `cluster_tags` is an array, and every
+  broker has both, so a `Map<String, Object>` model fails to parse against any
+  real broker.
+
 ### Notes
 
 Three defects in the metrics and alerts work were found by testing against a
