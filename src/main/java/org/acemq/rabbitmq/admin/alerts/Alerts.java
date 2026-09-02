@@ -146,8 +146,8 @@ public final class Alerts {
     /**
      * A node running out of disk.
      *
-     * <p>The one that becomes {@link #publishersBlocked()} shortly, and the difference between
-     * the two is how much time somebody has.
+     * <p>The one that becomes {@link #diskAlarm()} shortly, and the difference between the two
+     * is how much time somebody has.
      *
      * @return the rule
      */

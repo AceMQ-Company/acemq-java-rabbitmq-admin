@@ -55,7 +55,7 @@ import org.acemq.rabbitmq.admin.metrics.MetricsSnapshot;
  *
  * <p><strong>Not a replacement for Prometheus and Alertmanager.</strong> Evaluating here reads
  * one scrape, in one process, with no history, no deduplication, no silencing and no routing.
- * {@link #lasting(Duration)} cannot be honoured by a single snapshot at all — it is carried
+ * {@link Alert#lasting(Duration)} cannot be honoured by a single snapshot at all — it is carried
  * into the generated rule, where a real time-series database can evaluate it, and
  * {@link #evaluate} says so rather than pretending.
  *
@@ -183,7 +183,7 @@ public final class AlertRule {
      * Renders this rule as Prometheus alerting-rule YAML.
      *
      * <p>The half that {@link #evaluate} cannot do: {@code for:} needs history, and this is
-     * where {@link #lasting(Duration)} becomes real.
+     * where {@link Alert#lasting(Duration)} becomes real.
      *
      * @return a YAML fragment for a {@code groups[].rules[]} list
      */
