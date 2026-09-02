@@ -384,6 +384,140 @@ public final class RabbitAdmin implements AutoCloseable {
                 .orElseGet(Collections::emptyList);
     }
 
+
+    // ---- federation ---------------------------------------------------------------
+
+    /**
+     * @return the upstreams defined in this virtual host, or an empty list when the federation
+     *     plugin is not enabled
+     */
+    public List<FederationUpstream> federationUpstreams() {
+        return parameters("federation-upstream").stream()
+                .map(p -> new FederationUpstream(p.name(), p.vhost(), p.value()))
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /**
+     * Declares an upstream, or replaces one of the same name.
+     *
+     * <p><strong>This alone federates nothing.</strong> An upstream names a broker; a policy
+     * whose definition carries {@code federation-upstream} is what links anything to it. That
+     * two-step is the usual reason federation appears not to work, and nothing reports it
+     * because nothing is wrong.
+     *
+     * <pre>{@code
+     * admin.putFederationUpstream("other-dc", "amqp://user:pass@other-dc:5672",
+     *         Map.of("expires", 3_600_000));
+     * admin.putPolicy("federate", "^events\\.", Map.of("federation-upstream", "other-dc"), 1);
+     * }</pre>
+     *
+     * <p>Set {@code expires} unless there is a reason not to. Without it the queue federation
+     * creates on the upstream survives forever with nothing consuming from it, and a
+     * decommissioned downstream leaves a queue growing on somebody else's broker.
+     *
+     * @param name what to call it, and what a policy will refer to
+     * @param uri where the upstream broker is, credentials included
+     * @param settings {@code expires}, {@code message-ttl}, {@code ack-mode},
+     *     {@code max-hops}, {@code prefetch-count}; may be empty
+     */
+    public void putFederationUpstream(String name, String uri, Map<String, Object> settings) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(uri, "uri");
+        Objects.requireNonNull(settings, "settings");
+
+        Map<String, Object> value = new java.util.LinkedHashMap<>(settings);
+        value.put("uri", uri);
+        putParameter("federation-upstream", name, value);
+    }
+
+    /**
+     * @param name the upstream to remove. Any link using it stops; a policy still naming it
+     *     stays and quietly matches nothing
+     */
+    public void deleteFederationUpstream(String name) {
+        deleteParameter("federation-upstream", Objects.requireNonNull(name, "name"));
+    }
+
+    /**
+     * The links that actually exist.
+     *
+     * <p>The only proof federation is working. An upstream can be declared and a policy can
+     * match and there can still be no link, because the upstream is unreachable or its
+     * credentials are wrong — and none of that surfaces anywhere else.
+     *
+     * @return the links in this virtual host, or empty when the federation management plugin is
+     *     not enabled
+     */
+    public List<FederationLinkInfo> federationLinks() {
+        return get("/api/federation-links/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<FederationLinkInfo>>() { }, "federation links"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    // ---- shovels ------------------------------------------------------------------
+
+    /**
+     * Declares a dynamic shovel, or replaces one of the same name.
+     *
+     * <p><strong>A shovel consumes.</strong> A message it moves is gone from the source, which
+     * is what makes it right for draining a queue during a migration and wrong for copying a
+     * stream of events — federation does that. Pointing one at a queue somebody is still
+     * reading produces two consumers racing, and the shovel usually wins.
+     *
+     * <pre>{@code
+     * admin.declareShovel("drain-orders", Map.of(
+     *         "src-protocol", "amqp091", "src-uri", "amqp://old-broker", "src-queue", "orders",
+     *         "dest-protocol", "amqp091", "dest-uri", "amqp://new-broker", "dest-queue", "orders"));
+     * }</pre>
+     *
+     * @param name what to call it
+     * @param definition the shovel's source and destination
+     */
+    public void declareShovel(String name, Map<String, Object> definition) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(definition, "definition");
+        putParameter("shovel", name, definition);
+    }
+
+    /** @param name the shovel to remove. It stops moving messages immediately */
+    public void deleteShovel(String name) {
+        deleteParameter("shovel", Objects.requireNonNull(name, "name"));
+    }
+
+    // ---- runtime parameters -------------------------------------------------------
+
+    /**
+     * Runtime parameters of one component.
+     *
+     * <p>Federation upstreams and dynamic shovels are both stored this way, which is why they
+     * are declared and deleted identically and why neither appears in a topology export that
+     * only looks at queues and exchanges.
+     *
+     * @param component {@code federation-upstream}, {@code shovel}, or another plugin's
+     * @return the parameters, or empty when the plugin providing that component is absent
+     */
+    public List<ParameterInfo> parameters(String component) {
+        Objects.requireNonNull(component, "component");
+        return get("/api/parameters/" + encode(component) + "/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<ParameterInfo>>() { }, "parameters"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    private void putParameter(String component, String name, Map<String, Object> value) {
+        try {
+            // The broker wraps every parameter in a "value" object. Sending the definition at
+            // the top level is accepted with a 201 and stores something the plugin ignores.
+            put("/api/parameters/" + encode(component) + "/" + encode(vhost) + "/" + encode(name),
+                    json.writeValueAsString(Map.of("value", value)));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AdminException("could not encode the " + component + " '" + name + "'", e);
+        }
+    }
+
+    private void deleteParameter(String component, String name) {
+        delete("/api/parameters/" + encode(component) + "/" + encode(vhost) + "/" + encode(name));
+    }
+
     private Optional<String> get(String path) {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(baseUri.resolve(path))
