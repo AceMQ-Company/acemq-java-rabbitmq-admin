@@ -34,7 +34,7 @@ that stays enforced rather than merely intended.
 
 ## What it is for
 
-Three things, in the order they are worth building.
+Four things, in the order they are worth building.
 
 ### 1. The questions AMQP cannot answer
 
@@ -64,6 +64,53 @@ are also the mechanism behind blue/green broker migration, which is what
 `acemq-infrastructure` is for — this library is the half that talks to the
 broker.
 
+### 4. Metrics, and alerts that mean something
+
+`PrometheusMetrics` reads RabbitMQ's Prometheus endpoint — port 15692, the
+`rabbitmq_prometheus` plugin, no credentials — and answers the question
+`Pipeline` cannot: how many messages are waiting in a given queue, right now.
+
+```java
+PrometheusMetrics metrics = PrometheusMetrics.at("http://localhost:15692");
+
+long waiting = metrics.scrapeDetailed()
+        .forQueue("orders.new")
+        .metric("rabbitmq_detailed_queue_messages_ready")
+        .map(MetricSample::asLong)
+        .orElse(0L);
+```
+
+`/metrics` is aggregate — one broker-wide total, no queue labels — and
+`/metrics/detailed` is per-object, for the families you name. Asking for
+everything makes the broker enumerate every object it has, so the detailed
+scrape is always filtered.
+
+`Alerts` builds rules that are used twice: evaluated here, against one scrape,
+and exported as Prometheus alerting-rule YAML.
+
+```java
+AlertRule rule = Alert.named("queue-not-draining")
+        .on("rabbitmq_detailed_queue_messages_ready")
+        .above(100)
+        .whileZero("rabbitmq_detailed_queue_consumers")
+        .lasting(Duration.ofMinutes(5))
+        .groupedBy("vhost", "queue")
+        .because("messages are waiting and no consumer has taken them");
+
+List<AlertEvent> firing = rule.evaluate(metrics.scrapeDetailed());
+String yaml = rule.toPrometheusRule();
+```
+
+One definition, so a deployment gate, a health endpoint and the on-call page
+cannot drift apart. `Alerts.recommended()` is five rules, and the list is short
+deliberately: a pack of thirty alerts is a pack of thirty things to silence.
+
+Note what is **not** in it. Queue depth alone is not an alert — a queue is a
+buffer and having things in it is the job, so a depth threshold fires during
+every normal burst until somebody mutes it, taking the one real occurrence with
+it. `queueNotDraining()` requires depth *and* zero consumers, which is never
+normal.
+
 ## What it will not do
 
 - **It will not become a second message path.** No publishing, no consuming.
@@ -77,7 +124,7 @@ broker.
   there would need this, the feature is either redesigned or documented as
   absent. That rule is the reason the split exists.
 
-## Four things the broker taught us
+## Six things the broker taught us
 
 Each cost a test failure first, and each is the sort of thing that is obvious
 afterwards and invisible before.
@@ -100,6 +147,22 @@ upgrade for requests with a body.** Every `GET` succeeded and every `PUT` died
 with `EOF reached while reading`, so reads worked and provisioning silently did
 not. Reproduced with a bare `HttpClient` and no library code involved. The client
 now pins HTTP/1.1.
+
+**`rabbitmq_connections_blocked` does not exist.** A rule was written against it
+to catch a broker refusing publishes. It compiled, passed every unit test written
+against a hand-made scrape, and rendered valid Prometheus YAML — and it could
+never have fired, in either half, because RabbitMQ does not emit that metric. The
+real signals are `rabbitmq_alarms_memory_used_watermark` and
+`rabbitmq_alarms_free_disk_space_watermark`. `PrometheusMetricsIT` now asserts
+that every metric named by a shipped rule exists on a running broker, because a
+wrong metric name is not a compile error and not a test failure — it is silence,
+which is exactly what a working alert looks like.
+
+**`Double.parseDouble("NaN")` succeeds.** The parser skipped malformed values by
+catching `NumberFormatException`, which covers `+Inf` (Java wants `Infinity`) but
+not `NaN`. RabbitMQ emits `NaN` for a gauge it cannot yet compute, and a single
+one turned every `sum()` over that family into `NaN` — a broker-wide total
+quietly becoming "not a number". Non-finite values are now excluded explicitly.
 
 ## A policy is not an argument
 

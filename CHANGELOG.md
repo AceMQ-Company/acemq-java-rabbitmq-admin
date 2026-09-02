@@ -51,7 +51,49 @@ reasons.
   password whether anybody wanted them to or not. `uri()` returns it because
   comparing two upstreams needs it; `redactedUri()`, `toString()` and
   `ParameterInfo.toString()` never do.
+- **`PrometheusMetrics`** — reads the Prometheus endpoint on port 15692, which is
+  a different port and a different plugin from the management API, and needs no
+  credentials. `scrapeDetailed()` answers "how many messages are waiting in this
+  queue", which the aggregate `/metrics` cannot: it reports one broker-wide total
+  with no queue label, so a dashboard built on it shows a backlog without saying
+  where. The detailed scrape is always filtered to named metric families, because
+  an unfiltered one asks the broker to enumerate every object it has.
+- **`MetricsSnapshot` / `MetricSample`** — a parsed scrape, queryable by metric,
+  by queue, or summed. The parser handles the shapes that break a naive one: a
+  comma or an escaped quote inside a label value, and a trailing timestamp that
+  is not the value.
+- **`Alerts`, `Alert`, `AlertRule`** — a fluent DSL for alert rules that are used
+  twice: `evaluate(snapshot)` checks one scrape in-process, `toPrometheusRule()`
+  renders the same rule as Prometheus alerting YAML. One definition, so a
+  deployment gate, a health endpoint and the on-call page cannot drift apart.
+  `lasting(...)` is carried into the generated rule and cannot be honoured
+  in-process, which the javadoc says rather than pretending.
+
+  `Alerts.recommended()` is five rules. Queue depth alone is deliberately not one
+  of them: a queue is a buffer, so a depth threshold fires during every normal
+  burst until it is muted. `queueNotDraining()` requires depth *and* zero
+  consumers, expressed as `and on(vhost, queue)` in PromQL and as a label join
+  in `evaluate`.
 - A queue that does not exist is `Optional.empty()`; a 401 is an exception that
   says these are the broker's own users and need the monitoring or administrator
   tag. Reporting bad credentials as "no queue" would send somebody looking in
   entirely the wrong place.
+
+### Notes
+
+Three defects in the metrics and alerts work were found by testing against a
+running broker rather than a hand-written scrape, and are recorded because each
+would have shipped as silence rather than as a failure.
+
+- A shipped rule named `rabbitmq_connections_blocked`, which RabbitMQ does not
+  emit. It compiled, passed its unit tests, and rendered valid Prometheus YAML,
+  and it could never have fired. `PrometheusMetricsIT` now asserts that every
+  metric named by a shipped rule exists on a real broker.
+- `deadLetters()` was `queue_messages_ready > 0` with no queue filter, so it
+  fired at critical for every ordinary queue holding a single message. Its test
+  only checked a queue called `x.dlq` and so never saw it. `Alert.where(...)`
+  was added, and it applies to the exported expression as well as to the
+  in-process check.
+- The scrape parser skipped malformed numbers by catching
+  `NumberFormatException`, which does not cover `NaN` — `Double.parseDouble`
+  accepts it. One `NaN` turned any `sum()` over that family into `NaN`.
