@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>org.acemq</groupId>
+  <artifactId>acemq-java-rabbitmq-admin</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <name>AceMQ RabbitMQ Admin</name>
+  <description>RabbitMQ's HTTP management API for Java: users, vhosts, permissions, policies,
+    federation and shovels, and the queue facts AMQP cannot report. Deliberately separate from
+    acemq-java-amqp, because nothing in the message path may depend on a product-specific
+    management endpoint.</description>
+  <url>https://acemq.org/</url>
+
+  <organization>
+    <name>AceMQ</name>
+    <url>https://acemq.com</url>
+  </organization>
+
+  <licenses>
+    <license>
+      <name>Apache License, Version 2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <name>Felipe Gutierrez</name>
+      <organization>AceMQ</organization>
+      <organizationUrl>https://acemq.com</organizationUrl>
+    </developer>
+  </developers>
+
+  <!-- Its own version line, starting at 0.1.0. This library tracks RabbitMQ's
+       management API rather than AceMQ's messaging API. The two move for
+       different reasons: one number for both would mean releasing this because a
+       codec changed, or holding a management fix back for a messaging release. -->
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+    <!-- Java 11, matching acemq-java-amqp (ADR-015): an application on Boot 2.7
+         that uses one will use the other. -->
+    <maven.compiler.release>11</maven.compiler.release>
+    <java.baseline>11</java.baseline>
+    <build.jdk.min>17</build.jdk.min>
+
+    <!-- Kept in step with acemq-java-amqp deliberately. An application on the
+         classpath with both must not get two Jackson versions; Maven's nearest
+         wins rule makes that somebody's afternoon. -->
+    <jackson.version>2.18.9</jackson.version>
+    <slf4j.version>2.0.16</slf4j.version>
+
+    <junit.version>5.11.4</junit.version>
+    <assertj.version>3.27.7</assertj.version>
+    <testcontainers.version>1.21.4</testcontainers.version>
+  </properties>
+
+  <dependencies>
+    <!-- No HTTP client dependency yet. java.net.http.HttpClient is in the JDK
+         from 11, which is this library's baseline, and adding a client library
+         to something whose whole job is a dozen REST calls would put a
+         dependency in every consumer's tree for no benefit they can see. A
+         decision to record when it is made, rather than assumed now. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>${assertj.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>rabbitmq</artifactId>
+      <version>${testcontainers.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${testcontainers.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
