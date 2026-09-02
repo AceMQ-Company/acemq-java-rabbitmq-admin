@@ -3,10 +3,21 @@
 RabbitMQ's **HTTP management API** for Java: users, vhosts, permissions,
 policies, federation, shovels — and the queue facts AMQP will not tell you.
 
-> **Status: scaffolding.** Nothing is implemented yet. This repository exists,
-> has a shape, and is deliberately empty of claims. See
-> [what it is for](#what-it-is-for) and
-> [what it will not do](#what-it-will-not-do).
+> **Status: working, unreleased.** Queues, exchanges, bindings, vhosts, users,
+> permissions, policies and shovels are implemented and tested against a real
+> broker. Nothing is published anywhere yet. See
+> [what it will not do](#what-it-will-not-do) for the boundaries.
+
+```java
+try (RabbitAdmin admin = RabbitAdmin.connect("http://localhost:15672", "guest", "guest")) {
+    QueueInfo queue = admin.queue("orders.new").orElseThrow();
+    queue.argument("x-message-ttl");                  // what the broker actually holds
+
+    admin.bindingsForQueue("orders.new");             // invisible to AMQP entirely
+    admin.grant("orders-service", "^orders\\.", "^orders$", "^orders\\.new$");
+    admin.putPolicy("ttl", "^orders\\.", Map.of("message-ttl", 60000), 1);
+}
+```
 
 ## Why it is a separate repository
 
@@ -65,6 +76,47 @@ broker.
 - **It will not be required by anything in `acemq-java-amqp`.** If a feature
   there would need this, the feature is either redesigned or documented as
   absent. That rule is the reason the split exists.
+
+## Four things the broker taught us
+
+Each cost a test failure first, and each is the sort of thing that is obvious
+afterwards and invisible before.
+
+**The default vhost is literally `/`** and must reach the URL as `%2F`.
+Unencoded it produces `/api/queues///orders.new`, which 404s — and a 404 is
+indistinguishable from a queue that is not there.
+
+**`URLEncoder` turns a space into `+`.** Right for a form body, wrong for a path:
+a queue named `dead letters` would be looked up as `dead+letters` and reported
+missing.
+
+**RabbitMQ 4 records `x-queue-type` on every queue**, including ones declared
+with no arguments at all. Comparing a queue's arguments against a topology by
+equality therefore reports drift on every classic queue. Worth knowing before
+writing that comparison rather than after.
+
+**`HttpClient` defaults to HTTP/2 and the management API mishandles the h2c
+upgrade for requests with a body.** Every `GET` succeeded and every `PUT` died
+with `EOF reached while reading`, so reads worked and provisioning silently did
+not. Reproduced with a bare `HttpClient` and no library code involved. The client
+now pins HTTP/1.1.
+
+## A policy is not an argument
+
+The distinction that makes a topology comparison right or wrong:
+
+- an **argument** is fixed when the queue is declared and cannot be changed
+  without deleting the queue;
+- a **policy** is applied afterwards, matches by pattern, and can be edited at
+  any time.
+
+A queue governed by a policy shows **nothing** in its arguments. A drift check
+reading only arguments would call it plain. There is a test asserting exactly
+that, because it is the mistake this library exists to make avoidable.
+
+Two more: where several policies match, the highest priority wins *outright*
+rather than merging; and an argument beats a policy, so a policy that appears to
+do nothing is often being overridden by an argument nobody remembers setting.
 
 ## Requirements
 

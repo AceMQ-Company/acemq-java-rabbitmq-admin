@@ -24,6 +24,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.Map;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -81,6 +83,13 @@ public final class RabbitAdmin implements AutoCloseable {
         this.vhost = vhost;
         this.authorization = authorization;
         this.http = HttpClient.newBuilder()
+                // HTTP/1.1, explicitly. HttpClient defaults to HTTP/2 and attempts an h2c
+                // upgrade over plaintext, which the management API mishandles for a request
+                // with a body: every PUT dies with "EOF reached while reading" while every GET
+                // succeeds, so reads work and provisioning does not. Reproduced with a bare
+                // HttpClient and no library code involved, and fixed by not asking for the
+                // upgrade -- there is nothing here that HTTP/2 would make faster anyway.
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(timeout)
                 // Never follow a redirect. The management API does not issue them, so one
                 // arriving means something is in front of the broker -- a proxy, a login page,
@@ -155,7 +164,7 @@ public final class RabbitAdmin implements AutoCloseable {
     public List<QueueInfo> queues() {
         return get("/api/queues/" + encode(vhost))
                 .map(body -> readList(body, new TypeReference<List<QueueInfo>>() { }, "queues"))
-                .orElseGet(java.util.Collections::emptyList);
+                .orElseGet(Collections::emptyList);
     }
 
     /**
@@ -173,6 +182,206 @@ public final class RabbitAdmin implements AutoCloseable {
                         + " management API"));
         Object version = read(body, java.util.Map.class, "overview").get("rabbitmq_version");
         return version == null ? "unknown" : String.valueOf(version);
+    }
+
+
+    // ---- exchanges and bindings ---------------------------------------------------
+
+    /**
+     * @param name the exchange's name; the empty string is the default exchange
+     * @return the exchange, or empty when there is no such exchange in this virtual host
+     */
+    public Optional<ExchangeInfo> exchange(String name) {
+        Objects.requireNonNull(name, "name");
+        if (name.isEmpty()) {
+            // The default exchange's name is the empty string, so the path would end in a
+            // slash -- and /api/exchanges/%2F/ is the *listing* endpoint, which answers with an
+            // array. Reading that as one exchange fails with a parse error that blames the
+            // broker. Found from the list instead, which is the only way to address it.
+            return exchanges().stream().filter(e -> e.name().isEmpty()).findFirst();
+        }
+        return get("/api/exchanges/" + encode(vhost) + "/" + encode(name))
+                .map(body -> read(body, ExchangeInfo.class, "exchange " + name));
+    }
+
+    /** @return every exchange in this virtual host, including the broker's own */
+    public List<ExchangeInfo> exchanges() {
+        return get("/api/exchanges/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<ExchangeInfo>>() { }, "exchanges"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    /** @return every binding in this virtual host */
+    public List<BindingInfo> bindings() {
+        return get("/api/bindings/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<BindingInfo>>() { }, "bindings"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    /**
+     * What is bound to a queue.
+     *
+     * <p>The answer AMQP cannot give, and the one that identifies an unroutable message: a
+     * publish that nothing receives is a routing key with no binding, and until now the only
+     * way to find that out was to publish and be told.
+     *
+     * @param queue the queue
+     * @return its bindings, including the implicit default-exchange one
+     */
+    public List<BindingInfo> bindingsForQueue(String queue) {
+        Objects.requireNonNull(queue, "queue");
+        return get("/api/queues/" + encode(vhost) + "/" + encode(queue) + "/bindings")
+                .map(body -> readList(body, new TypeReference<List<BindingInfo>>() { }, "bindings"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    // ---- virtual hosts ------------------------------------------------------------
+
+    /** @return every virtual host on the broker. Not scoped to this client's vhost */
+    public List<VhostInfo> vhosts() {
+        return get("/api/vhosts")
+                .map(body -> readList(body, new TypeReference<List<VhostInfo>>() { }, "vhosts"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    /**
+     * Creates a virtual host, or does nothing when it is already there.
+     *
+     * @param name what to call it
+     */
+    public void createVhost(String name) {
+        put("/api/vhosts/" + encode(Objects.requireNonNull(name, "name")), "{}");
+    }
+
+    /**
+     * Deletes a virtual host <strong>and everything in it</strong>.
+     *
+     * <p>Every queue, every message in them, every exchange, every binding and every
+     * permission, with no confirmation and nothing to undo it. There is no soft delete in this
+     * API and this method does not invent one.
+     *
+     * @param name the virtual host to remove
+     */
+    public void deleteVhost(String name) {
+        delete("/api/vhosts/" + encode(Objects.requireNonNull(name, "name")));
+    }
+
+    // ---- users and permissions ----------------------------------------------------
+
+    /** @return every user on the broker */
+    public List<UserInfo> users() {
+        return get("/api/users")
+                .map(body -> readList(body, new TypeReference<List<UserInfo>>() { }, "users"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    /**
+     * Creates or updates a user.
+     *
+     * <p>The password is sent to the broker, which hashes it. It therefore crosses the network
+     * in the request body, so this call belongs over HTTPS anywhere the network is not
+     * trusted — the management API accepts plain HTTP and will not warn you.
+     *
+     * @param name the user
+     * @param password its password
+     * @param tags {@code administrator}, {@code monitoring}, {@code management},
+     *     {@code policymaker}, or none for a user that can connect and nothing else
+     */
+    public void createUser(String name, String password, String... tags) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(password, "password");
+        put("/api/users/" + encode(name),
+                "{\"password\":" + quote(password) + ",\"tags\":" + quote(String.join(",", tags)) + "}");
+    }
+
+    /**
+     * @param name the user to remove. Connections it already has are closed by the broker
+     */
+    public void deleteUser(String name) {
+        delete("/api/users/" + encode(Objects.requireNonNull(name, "name")));
+    }
+
+    /** @return every permission on the broker, across all virtual hosts */
+    public List<PermissionInfo> permissions() {
+        return get("/api/permissions")
+                .map(body -> readList(body, new TypeReference<List<PermissionInfo>>() { }, "permissions"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    /**
+     * Grants a user access to this client's virtual host.
+     *
+     * <p>Three regular expressions, matched against resource names. {@code ".*"} for all three
+     * is unrestricted access — what most tutorials show, and rarely what anybody means.
+     *
+     * @param user the user
+     * @param configure what it may declare and delete
+     * @param write what it may publish to
+     * @param read what it may consume from
+     */
+    public void grant(String user, String configure, String write, String read) {
+        Objects.requireNonNull(user, "user");
+        put("/api/permissions/" + encode(vhost) + "/" + encode(user),
+                "{\"configure\":" + quote(configure) + ",\"write\":" + quote(write)
+                        + ",\"read\":" + quote(read) + "}");
+    }
+
+    /**
+     * @param user the user losing access to this client's virtual host
+     */
+    public void revoke(String user) {
+        delete("/api/permissions/" + encode(vhost) + "/" + encode(Objects.requireNonNull(user, "user")));
+    }
+
+    // ---- policies -----------------------------------------------------------------
+
+    /** @return the policies in this virtual host */
+    public List<PolicyInfo> policies() {
+        return get("/api/policies/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<PolicyInfo>>() { }, "policies"))
+                .orElseGet(Collections::emptyList);
+    }
+
+    /**
+     * Creates or replaces a policy.
+     *
+     * <p>Unlike a queue argument, this can be changed later — which is the reason to prefer a
+     * policy for anything operational. Note that where several policies match, the highest
+     * priority wins <em>outright</em>; the definitions are not merged.
+     *
+     * @param name what to call it
+     * @param pattern a regular expression matched against names
+     * @param definition what to set
+     * @param priority higher wins
+     */
+    public void putPolicy(String name, String pattern, Map<String, Object> definition, int priority) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(pattern, "pattern");
+        Objects.requireNonNull(definition, "definition");
+        try {
+            String body = json.writeValueAsString(Map.of(
+                    "pattern", pattern, "definition", definition, "priority", priority, "apply-to", "all"));
+            put("/api/policies/" + encode(vhost) + "/" + encode(name), body);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AdminException("could not encode the policy '" + name + "'", e);
+        }
+    }
+
+    /** @param name the policy to remove. What it was applying reverts immediately */
+    public void deletePolicy(String name) {
+        delete("/api/policies/" + encode(vhost) + "/" + encode(Objects.requireNonNull(name, "name")));
+    }
+
+    // ---- shovels ------------------------------------------------------------------
+
+    /**
+     * @return the shovels the broker is running, or an empty list when the shovel plugin is
+     *     not enabled — which is a configuration fact rather than a failure
+     */
+    public List<ShovelInfo> shovels() {
+        return get("/api/shovels")
+                .map(body -> readList(body, new TypeReference<List<ShovelInfo>>() { }, "shovels"))
+                .orElseGet(Collections::emptyList);
     }
 
     private Optional<String> get(String path) {
@@ -202,6 +411,13 @@ public final class RabbitAdmin implements AutoCloseable {
             case 404:
                 // Absent, which is an answer rather than a failure.
                 return Optional.empty();
+            case 406:
+                // What the management API answers for an endpoint whose plugin is not enabled
+                // -- /api/shovels without rabbitmq_shovel_management, for instance. A
+                // configuration fact about the broker rather than something a caller can fix,
+                // and reporting it as a failure would make "are there any shovels?"
+                // unanswerable on a broker that simply has none.
+                return Optional.empty();
             case 401:
                 throw new AdminException("the management API rejected these credentials. They are"
                         + " the broker's own users, not the AMQP connection's, and the user needs the"
@@ -213,6 +429,66 @@ public final class RabbitAdmin implements AutoCloseable {
             default:
                 throw new AdminException("the management API answered " + response.statusCode()
                         + " for " + path + ": " + abbreviate(response.body()));
+        }
+    }
+
+
+    private void put(String path, String body) {
+        send(HttpRequest.newBuilder()
+                .uri(baseUri.resolve(path))
+                .timeout(timeout)
+                .header("Authorization", authorization)
+                .header("Content-Type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .build(), path);
+    }
+
+    private void delete(String path) {
+        send(HttpRequest.newBuilder()
+                .uri(baseUri.resolve(path))
+                .timeout(timeout)
+                .header("Authorization", authorization)
+                .DELETE()
+                .build(), path);
+    }
+
+    /**
+     * Runs a write and checks it worked.
+     *
+     * <p>A 404 is not swallowed here as it is for a read. Deleting something that is not there
+     * is arguably fine; being told a write succeeded when the endpoint does not exist is how a
+     * provisioning run reports success and changes nothing.
+     */
+    private void send(HttpRequest request, String path) {
+        HttpResponse<String> response;
+        try {
+            response = http.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new AdminException("could not reach the management API at " + baseUri, e);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AdminException("interrupted while calling " + path, e);
+        }
+
+        int status = response.statusCode();
+        if (status == 200 || status == 201 || status == 204) {
+            return;
+        }
+        if (status == 401 || status == 403) {
+            throw new AdminException("the management API refused this write to " + path
+                    + ". Reading needs the monitoring tag; changing anything needs administrator,"
+                    + " or policymaker for policies.");
+        }
+        throw new AdminException("the management API answered " + status + " for a write to "
+                + path + ": " + abbreviate(response.body()));
+    }
+
+    /** Quotes a string as JSON, so a password containing a quote does not produce a broken body. */
+    private String quote(String value) {
+        try {
+            return json.writeValueAsString(value == null ? "" : value);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new AdminException("could not encode a value for the management API", e);
         }
     }
 
