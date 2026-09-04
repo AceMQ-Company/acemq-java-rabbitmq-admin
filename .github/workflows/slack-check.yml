@@ -7,18 +7,12 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Is the secret actually populated in this repository?
-        env:
-          W: ${{ secrets.SLACK_DELIVERY_WEBHOOK }}
-        run: |
-          # Length is safe to print; the value itself is masked by the runner and
-          # is never echoed here.
-          echo "secret length: ${#W}"
-          case "$W" in
-            "")                       echo "verdict: PRESENT BY NAME BUT EMPTY" ;;
-            https://hooks.slack.com/*) echo "verdict: looks like a Slack webhook" ;;
-            *)                        echo "verdict: non-empty, but not a hooks.slack.com URL" ;;
-          esac
+  explicit:
+    uses: AceMQ-Company/acemq-java-amqp/.github/workflows/slack-notify.yml@main
+    with:
+      status: success
+      title: "Slack wiring verified"
+      message: "Sent from acemq-java-rabbitmq-admin to confirm the webhook reaches the channel."
+      icon: ":satellite_antenna:"
+    secrets:
+      SLACK_DELIVERY_WEBHOOK: ${{ secrets.SLACK_DELIVERY_WEBHOOK }}
