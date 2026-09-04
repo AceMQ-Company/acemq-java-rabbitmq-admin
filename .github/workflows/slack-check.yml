@@ -1,5 +1,3 @@
-# Temporary: proves this repository can reach Slack through the shared workflow.
-# Deleted immediately after it has run once.
 name: slack-check
 
 on:
@@ -9,12 +7,18 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    uses: AceMQ-Company/acemq-java-amqp/.github/workflows/slack-notify.yml@main
-    with:
-      status: success
-      title: "Slack wiring verified"
-      message: "This repository can post to the channel. Sent once to confirm the webhook, then the workflow that sent it was deleted."
-      icon: ":satellite_antenna:"
-    secrets:
-      SLACK_DELIVERY_WEBHOOK: ${{ secrets.SLACK_DELIVERY_WEBHOOK }}
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Is the secret actually populated in this repository?
+        env:
+          W: ${{ secrets.SLACK_DELIVERY_WEBHOOK }}
+        run: |
+          # Length is safe to print; the value itself is masked by the runner and
+          # is never echoed here.
+          echo "secret length: ${#W}"
+          case "$W" in
+            "")                       echo "verdict: PRESENT BY NAME BUT EMPTY" ;;
+            https://hooks.slack.com/*) echo "verdict: looks like a Slack webhook" ;;
+            *)                        echo "verdict: non-empty, but not a hooks.slack.com URL" ;;
+          esac
