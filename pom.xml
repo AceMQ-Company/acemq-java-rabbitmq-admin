@@ -63,7 +63,15 @@
     <junit.version>5.11.4</junit.version>
     <assertj.version>3.27.7</assertj.version>
     <testcontainers.version>1.21.4</testcontainers.version>
-    <amqp.client.version>5.25.0</amqp.client.version>
+    <!-- Kept level with acemq-java-amqp, which pins the same client. This sat on
+         5.25.0 while the library moved to 5.36.0, and the drift was worth seven
+         Dependabot advisories in test scope alone: two unbounded-allocation OOMs
+         in ValueReader, a Class.forName in the JSON-RPC client, and a frame_max
+         that was not enforced. None of them reached a consumer, since this
+         client is test-scoped here and the library ships its own pin. But a
+         test broker client that cannot survive a malformed frame is no use for
+         testing what happens on a malformed frame. -->
+    <amqp.client.version>5.36.0</amqp.client.version>
   </properties>
 
   <dependencies>
