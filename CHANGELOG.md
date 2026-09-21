@@ -12,6 +12,8 @@ reasons.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-03
+
 ### Added
 - The repository: licence, notice, build, and a README that says what this is for
   and what it will not do.
