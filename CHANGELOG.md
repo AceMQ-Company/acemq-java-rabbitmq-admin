@@ -12,6 +12,37 @@ reasons.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-21
+
+**Nothing in this release changes what the library does.** The published API,
+its behaviour and its runtime dependencies are identical to 0.1.0. It exists so
+that the version on the Maven feed is one a release built, and it is worth saying
+plainly rather than dressing up.
+
+### Security
+
+- **`com.rabbitmq:amqp-client` moves 5.25.0 to 5.36.0**, closing seven advisories:
+  CVE-2026-69219 and CVE-2026-69220 (unbounded allocation and unbounded recursion in
+  `ValueReader`), CVE-2026-63337 (an unvalidated `Class.forName` in the JSON-RPC client),
+  CVE-2026-75516 (`Math.min(maxInboundMessageBodySize, 0)` switching off the very limit it
+  was meant to tighten), CVE-2026-63336 (`TrustEverythingTrustManager` by default in
+  `useSslProtocol()`), CVE-2026-63335 and CVE-2026-61634.
+
+  **This client is test-scoped here and reaches no consumer**, so nobody using this library
+  was exposed. What the drift cost was the tests: a broker client that cannot survive a
+  malformed frame is no use for testing what happens on a malformed frame. It is now level
+  with `acemq-java-amqp`, and the property says so, because nothing kept the two numbers
+  together and that is how it fell five versions behind.
+
+### Fixed
+
+- **A tag now publishes this library.** There was no release workflow, so pushing a tag did
+  nothing and 0.1.0 reached the Maven feed because somebody ran `mvn deploy` from their own
+  machine — complete and correct, as it turned out, but unverified and unreproducible. The
+  release now runs the suite against a real broker, refuses a version the changelog does not
+  record, fails on any skipped test, and resolves the published version from an empty local
+  repository afterwards.
+
 ## [0.1.0] - 2026-09-03
 
 ### Added
