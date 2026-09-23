@@ -44,6 +44,10 @@ jobs:
       # Whether anything reached the feed. False for every failure before the
       # push, which is most of them, and the line the notification keys off.
       published: ${{ steps.push.outputs.published }}
+      # The tag carries the same number, but a workflow_dispatch does not, and
+      # the release page has to be created for whatever was actually deployed
+      # rather than for whatever the ref happens to be called.
+      version: ${{ steps.version.outputs.value }}
     steps:
       - uses: actions/checkout@v4
 
@@ -235,23 +239,89 @@ jobs:
             -Dartifact="org.acemq:acemq-java-rabbitmq-admin:$VERSION"
           echo "$VERSION resolves from a clean repository."
 
-  notify:
+  # The releases page. 0.1.1 went out on 21 September 2026 -- on the feed,
+  # resolving from an empty local repository, checked artifact by artifact --
+  # while this repository's releases page still showed 0.1.0 as the newest
+  # thing that existed. Somebody read that page, concluded the release had not
+  # happened, and spent a morning chasing a failure there was none of. A page
+  # that is merely empty gets checked against something else; a page that names
+  # a real, older version is read as current, and nothing about it looks stale.
+  #
+  # Keyed on the push rather than on the job having got this far, for the same
+  # reason the notification is: a release page naming a version the feed never
+  # received sends a reader to a dependency block that resolves nothing, and
+  # Maven will blame their settings.xml rather than us.
+  #
+  # Nothing is attached. The obvious thing to hang here is the jar, and it is
+  # precisely the wrong thing: a jar downloaded from a release page arrives on
+  # its own, without the pom that names Jackson and SLF4J, so it resolves no
+  # dependencies and dies at the first call into either of them. It looks like
+  # the artifact somebody wants and it is not one, which is worse than offering
+  # nothing at all -- the download that is not there is a question, and the
+  # download that half works is a bug report. The feed is the only honest way
+  # to get this library, so the notes point at the feed.
+  announce:
     needs: [publish]
+    if: needs.publish.outputs.published == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.publish.outputs.version }}
+        run: |
+          # `|| echo` rather than a failure: re-running a good release is a
+          # normal thing to do -- a dispatch after a Pages timeout, say -- and
+          # the release already existing is the state this step wanted anyway.
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes "AceMQ RabbitMQ admin client $VERSION.
+
+          \`\`\`xml
+          <repository>
+            <id>acemq</id>
+            <url>https://acemq.org/maven/</url>
+          </repository>
+
+          <dependency>
+            <groupId>org.acemq</groupId>
+            <artifactId>acemq-java-rabbitmq-admin</artifactId>
+            <version>$VERSION</version>
+          </dependency>
+          \`\`\`
+
+          The repository is served over GitHub Pages, so nothing here needs credentials.
+
+          There is no jar attached. This library needs its pom to bring Jackson and SLF4J with it, and a jar taken off a release page arrives without one.
+
+          Documentation: https://acemq.org/acemq-java-rabbitmq-admin/
+          Changelog: https://github.com/AceMQ-Company/acemq-java-rabbitmq-admin/blob/v$VERSION/CHANGELOG.md" \
+            || echo "release v$VERSION already exists"
+
+  notify:
+    needs: [publish, announce]
     # Only when something actually reached the feed. A run that failed before the
     # push published nothing, and announcing that as a release -- in either
     # direction -- tells the channel about a version that does not exist.
     if: always() && needs.publish.outputs.published == 'true'
     uses: AceMQ-Company/acemq-java-amqp/.github/workflows/slack-notify.yml@main
     with:
-      status: ${{ needs.publish.result }}
+      # Both halves have to have worked for this to read as done. Artifacts on
+      # the feed with no release page is the state that cost somebody a morning,
+      # and announcing it as finished is how it would cost them another one.
+      status: ${{ (needs.publish.result == 'success' && needs.announce.result == 'success') && 'success' || 'failure' }}
       title: >-
-        ${{ needs.publish.result == 'success'
+        ${{ (needs.publish.result == 'success' && needs.announce.result == 'success')
             && format('acemq-java-rabbitmq-admin {0} released', github.ref_name)
             || format('acemq-java-rabbitmq-admin {0} is published but the release did not finish', github.ref_name) }}
       message: >-
-        ${{ needs.publish.result == 'success'
-            && 'On the Maven feed and resolving from a clean repository.'
-            || 'The artifacts are on the feed and consumers can resolve them, but a later step did not pass. Most often that is GitHub Pages taking longer than the verify step waits. Check the run before doing anything to the tag.' }}
+        ${{ (needs.publish.result == 'success' && needs.announce.result == 'success')
+            && 'On the Maven feed, resolving from a clean repository, and on the releases page.'
+            || 'The artifacts are on the feed and consumers can resolve them, but a later step did not pass. Most often that is GitHub Pages taking longer than the verify step waits, or the releases page not being written. Check the run before doing anything to the tag.' }}
       # Roadworks rather than a red dot, and the title says "published but the
       # release did not finish" rather than "failed". By the time this runs the
       # artifacts are on the feed: the release is out, and what did not finish is
@@ -264,7 +334,7 @@ jobs:
       # on the status-derived tick does not work: in GitHub's expression language
       # `a && '' || b` yields b, because an empty string is falsy, so every
       # successful release would be announced with roadworks.
-      icon: ${{ needs.publish.result == 'success' && ':white_check_mark:' || ':construction:' }}
+      icon: ${{ (needs.publish.result == 'success' && needs.announce.result == 'success') && ':white_check_mark:' || ':construction:' }}
       url: https://acemq.org/maven/
     secrets:
       # Explicit, not `inherit`. A reusable workflow in another repository does
