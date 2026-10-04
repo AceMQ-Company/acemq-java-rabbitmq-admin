@@ -12,6 +12,8 @@ reasons.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-04
+
 ### Security
 
 - Jackson moves from 2.18.9 to 2.22.3, which closes three advisories against
