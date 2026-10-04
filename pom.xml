@@ -53,8 +53,10 @@
 
     <!-- Kept in step with acemq-java-amqp deliberately. An application on the
          classpath with both must not get two Jackson versions; Maven's nearest
-         wins rule makes that somebody's afternoon. -->
-    <jackson.version>2.18.9</jackson.version>
+         wins rule makes that somebody's afternoon. It is a release train for
+         jackson-bom, not a version applied per artifact: jackson-annotations has
+         no 2.22.x release, so one property on every artifact cannot resolve. -->
+    <jackson.version>2.22.3</jackson.version>
     <slf4j.version>2.0.16</slf4j.version>
 
     <maven.surefire.plugin.version>3.5.2</maven.surefire.plugin.version>
@@ -74,6 +76,21 @@
     <amqp.client.version>5.36.0</amqp.client.version>
   </properties>
 
+  <dependencyManagement>
+    <dependencies>
+      <!-- The whole Jackson family from one import, as acemq-java-amqp does, so
+           databind, core and annotations each get the right version from one
+           train. -->
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>${jackson.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
   <dependencies>
     <!-- No HTTP client dependency yet. java.net.http.HttpClient is in the JDK
          from 11, which is this library's baseline, and adding a client library
@@ -83,7 +100,6 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
-      <version>${jackson.version}</version>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>

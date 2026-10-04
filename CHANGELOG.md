@@ -12,6 +12,16 @@ reasons.
 
 ## [Unreleased]
 
+### Security
+
+- Jackson moves from 2.18.9 to 2.22.3, which closes three advisories against
+  `jackson-databind` below 2.18.10 (one high, two medium). The family is now
+  managed by importing `jackson-bom`, the same way acemq-java-amqp does, so the
+  two libraries keep resolving one Jackson between them; `jackson-annotations`
+  has no 2.22.x release and the BOM is what picks its version. Jackson 2.22
+  still ships Java 8 bytecode, so the Java 11 baseline is unchanged. No model
+  class changed.
+
 ## [0.1.1] - 2026-09-21
 
 **Nothing in this release changes what the library does.** The published API,
