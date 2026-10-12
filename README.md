@@ -12,11 +12,12 @@
 RabbitMQ's **HTTP management API** for Java: users, vhosts, permissions,
 policies, federation, shovels — and the queue facts AMQP will not tell you.
 
-> **Status: working, unreleased.** Topology, provisioning (with passwords hashed
-> client-side), federation and shovels, health checks, connections, failed-login
-> counters, streams, metrics, alerts and definitions export/import are
-> implemented and tested against a real broker — 51 unit tests and 66
-> integration tests. Nothing is published anywhere yet. See
+> **Status: released, 0.1.2 on [acemq.org/maven](https://acemq.org/maven/).**
+> Topology, provisioning (with passwords hashed client-side), federation and
+> shovels, health checks, connections, failed-login counters, streams, metrics,
+> alerts and definitions export/import are implemented and tested against a real
+> broker — 51 unit tests and 66 integration tests. Client-side password hashing,
+> streams, failed logins, rebalancing and extensions are on `main` for 0.2.0. See
 > [what it will not do](#what-it-will-not-do) for the boundaries.
 
 ```java
