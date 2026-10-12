@@ -278,9 +278,12 @@ public final class RabbitAdmin implements AutoCloseable {
     /**
      * Creates or updates a user.
      *
-     * <p>The password is sent to the broker, which hashes it. It therefore crosses the network
-     * in the request body, so this call belongs over HTTPS anywhere the network is not
-     * trusted — the management API accepts plain HTTP and will not warn you.
+     * <p><strong>The password does not leave this process.</strong> It is hashed here, with
+     * RabbitMQ's own salted SHA-256, and the broker is sent {@code password_hash} and
+     * {@code hashing_algorithm}. Up to 0.1.x the password itself was sent and the broker
+     * hashed it, which put it in a request body over whatever transport the base URL named —
+     * often plain HTTP. HTTPS is still right for this API: the hash is not the password, and is
+     * still enough to stand up a broker the password works against.
      *
      * @param name the user
      * @param password its password
@@ -288,10 +291,27 @@ public final class RabbitAdmin implements AutoCloseable {
      *     {@code policymaker}, or none for a user that can connect and nothing else
      */
     public void createUser(String name, String password, String... tags) {
-        Objects.requireNonNull(name, "name");
         Objects.requireNonNull(password, "password");
+        createUser(name, PasswordHash.sha256(password), tags);
+    }
+
+    /**
+     * Creates or updates a user from a hash computed elsewhere.
+     *
+     * <pre>{@code
+     * admin.createUser("orders-service", PasswordHash.of(hashFromVault, PasswordHash.SHA256));
+     * }</pre>
+     *
+     * @param name the user
+     * @param hash its password hash
+     * @param tags as for {@link #createUser(String, String, String...)}
+     */
+    public void createUser(String name, PasswordHash hash, String... tags) {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(hash, "hash");
         put("/api/users/" + encode(name),
-                "{\"password\":" + quote(password) + ",\"tags\":" + quote(String.join(",", tags)) + "}");
+                body(mapOf("password_hash", hash.hash(), "hashing_algorithm", hash.algorithm(),
+                        "tags", String.join(",", tags)), "user " + name));
     }
 
     /**
@@ -299,6 +319,37 @@ public final class RabbitAdmin implements AutoCloseable {
      */
     public void deleteUser(String name) {
         delete("/api/users/" + encode(Objects.requireNonNull(name, "name")));
+    }
+
+    /**
+     * Deletes several users in one request.
+     *
+     * <p>A name that is not a user is skipped rather than refused, so this is safe to repeat.
+     * {@code POST /api/users/bulk-delete}.
+     *
+     * @param names the users to remove
+     */
+    public void deleteUsers(String... names) {
+        for (String name : names) {
+            Objects.requireNonNull(name, "a user name");
+        }
+        post("/api/users/bulk-delete", body(mapOf("users", List.of(names)), "bulk user delete"));
+    }
+
+    /**
+     * Users that cannot reach any virtual host.
+     *
+     * <p>The broker's own answer to "which accounts are left over?". A user here can still log
+     * in to the management API if it has a tag, so it is not necessarily harmless — but it is
+     * not used by any application, because no application can connect as it.
+     *
+     * @return every user with no permissions in any virtual host
+     */
+    public List<UserInfo> usersWithoutPermissions() {
+        return get("/api/users/without-permissions")
+                .map(body -> readList(body, new TypeReference<List<UserInfo>>() { },
+                        "users without permissions"))
+                .orElse(Collections.emptyList());
     }
 
     /** @return every permission on the broker, across all virtual hosts */
@@ -949,6 +1000,156 @@ public final class RabbitAdmin implements AutoCloseable {
         return get("/api/global-parameters")
                 .map(body -> readList(body, new TypeReference<List<GlobalParameterInfo>>() { },
                         "global parameters"))
+                .orElse(Collections.emptyList());
+    }
+
+    /**
+     * Moves queue leaders so each node leads a fair share.
+     *
+     * <p>After a rolling restart every quorum queue and stream tends to be led from whichever
+     * node came back first, and that node does most of the work. This asks the broker to spread
+     * the leaders out again. {@code POST /api/rebalance/queues}.
+     *
+     * <p><strong>Asynchronous.</strong> The call returns once the broker has accepted the
+     * request, not when the leaders have moved; the outcome is reported only in the broker's
+     * log. Each leader that moves makes its queue briefly unavailable, so this is a maintenance
+     * operation rather than something to run on a timer.
+     */
+    public void rebalanceQueues() {
+        post("/api/rebalance/queues", "");
+    }
+
+    /**
+     * @return the JavaScript files that management plugins have registered with the UI — the
+     *     plugin list as the management API sees it, so {@code stream.js} here means
+     *     {@code rabbitmq_stream_management} is enabled. {@code GET /api/extensions}
+     */
+    public List<String> extensions() {
+        // The broker answers with one entry per plugin, and a plugin without an extension
+        // contributes an empty array rather than nothing: [{"javascript":"dispatcher.js"},[],
+        // {"javascript":["stream_management-ejs.js","stream.js"]}]. "javascript" is a string on
+        // 3.13 and may be an array on 4.x. Flattened here, because nobody wants that shape.
+        List<Object> raw = get("/api/extensions")
+                .map(body -> readList(body, new TypeReference<List<Object>>() { }, "extensions"))
+                .orElse(Collections.emptyList());
+        List<String> files = new java.util.ArrayList<>();
+        for (Object entry : raw) {
+            Object js = entry instanceof Map ? ((Map<?, ?>) entry).get("javascript") : null;
+            if (js instanceof List) {
+                ((List<?>) js).forEach(file -> files.add(String.valueOf(file)));
+            } else if (js != null) {
+                files.add(js.toString());
+            }
+        }
+        return Collections.unmodifiableList(files);
+    }
+
+    // ------------------------------------------------------- authentication attempts
+
+    /**
+     * Login attempts one node has counted, per protocol.
+     *
+     * <p>The only record of a failed login: it never becomes a connection, so nothing else
+     * lists it. Counted per node, which is why a node is named — {@link NodeInfo#name()}.
+     *
+     * @param node a node name, such as {@code rabbit@host}
+     * @return the counters, or empty when there is no such node
+     */
+    public List<AuthAttemptInfo> authAttempts(String node) {
+        return authAttemptsAt("/api/auth/attempts/" + encode(Objects.requireNonNull(node, "node")));
+    }
+
+    /**
+     * Login attempts one node has counted, per remote address and username.
+     *
+     * <p><strong>Empty unless the broker is told to track them.</strong> The setting is
+     * {@code track_auth_attempt_source} in the {@code rabbit} application, off by default, and
+     * has no {@code rabbitmq.conf} key on 3.13 or 4.x: it goes in {@code advanced.config} as
+     * {@code [{rabbit, [{track_auth_attempt_source, true}]}]}. Off because every distinct
+     * address and username becomes an entry, and a scanner trying many usernames would grow the
+     * table without limit.
+     *
+     * @param node a node name
+     * @return the counters, or empty when source tracking is off or there is no such node
+     */
+    public List<AuthAttemptInfo> authAttemptsBySource(String node) {
+        return authAttemptsAt("/api/auth/attempts/" + encode(Objects.requireNonNull(node, "node"))
+                + "/source");
+    }
+
+    /**
+     * Zeroes one node's login counters, the per-protocol totals and the per-source entries
+     * alike — after a misconfigured client is fixed, say, so a failure that follows is a new
+     * one.
+     *
+     * @param node a node name
+     */
+    public void resetAuthAttempts(String node) {
+        delete("/api/auth/attempts/" + encode(Objects.requireNonNull(node, "node")));
+    }
+
+    private List<AuthAttemptInfo> authAttemptsAt(String path) {
+        return get(path)
+                .map(body -> readList(body, new TypeReference<List<AuthAttemptInfo>>() { },
+                        "authentication attempts"))
+                .orElse(Collections.emptyList());
+    }
+
+    // ------------------------------------------------------------------ streams
+
+    /**
+     * Connections over the stream protocol, across all virtual hosts.
+     *
+     * <p>These need the {@code rabbitmq_stream_management} plugin, and without it every stream
+     * method here answers an empty list — the same rule as {@link #shovels()}: a plugin that is
+     * not enabled is a fact about the broker, not a failure. {@link #extensions()} containing
+     * {@code stream.js} is how to tell the two kinds of empty apart.
+     *
+     * <p>The broker reports stream connections, publishers and consumers through its
+     * statistics, so one that appeared within the last statistics interval — five seconds by
+     * default — is not listed yet.
+     *
+     * @return every stream protocol connection
+     */
+    public List<StreamConnectionInfo> streamConnections() {
+        return get("/api/stream/connections")
+                .map(body -> readList(body, new TypeReference<List<StreamConnectionInfo>>() { },
+                        "stream connections"))
+                .orElse(Collections.emptyList());
+    }
+
+    /** @return the stream publishers in this virtual host */
+    public List<StreamPublisherInfo> streamPublishers() {
+        return streamPublishersAt("/api/stream/publishers/" + encode(vhost));
+    }
+
+    /**
+     * @param stream a stream in this virtual host
+     * @return the publishers writing to it
+     */
+    public List<StreamPublisherInfo> streamPublishers(String stream) {
+        return streamPublishersAt("/api/stream/publishers/" + encode(vhost) + "/"
+                + encode(Objects.requireNonNull(stream, "stream")));
+    }
+
+    /**
+     * There is no per-stream form of this, unlike {@link #streamPublishers(String)}:
+     * {@code /api/stream/consumers/{vhost}/{stream}} answers 400 on 3.13 and 4.x alike. Filter
+     * on {@link StreamConsumerInfo#stream()} instead.
+     *
+     * @return the stream consumers in this virtual host
+     */
+    public List<StreamConsumerInfo> streamConsumers() {
+        return get("/api/stream/consumers/" + encode(vhost))
+                .map(body -> readList(body, new TypeReference<List<StreamConsumerInfo>>() { },
+                        "stream consumers"))
+                .orElse(Collections.emptyList());
+    }
+
+    private List<StreamPublisherInfo> streamPublishersAt(String path) {
+        return get(path)
+                .map(body -> readList(body, new TypeReference<List<StreamPublisherInfo>>() { },
+                        "stream publishers"))
                 .orElse(Collections.emptyList());
     }
 

@@ -147,4 +147,74 @@ class RabbitAdminTest {
                     .isInstanceOf(UnsupportedOperationException.class);
         }
     }
+
+    @Nested
+    @DisplayName("reading streams and login attempts")
+    class StreamsAndAttempts {
+
+        private final com.fasterxml.jackson.databind.ObjectMapper json =
+                new com.fasterxml.jackson.databind.ObjectMapper();
+
+        @Test
+        @DisplayName("a publisher seen before the first statistics interval has no connection yet")
+        void publisherBeforeStatistics() throws Exception {
+            // Verbatim from RabbitMQ 4.3 a moment after the publisher was declared.
+            StreamPublisherInfo publisher = json.readValue("{\"connection_details\":{},"
+                    + "\"confirmed\":0,\"errored\":0,\"published\":0,\"publisher_id\":0,"
+                    + "\"queue\":{\"name\":\"s1\",\"vhost\":\"/\"},\"reference\":\"pname\"}",
+                    StreamPublisherInfo.class);
+
+            assertThat(publisher.reference()).isEqualTo("pname");
+            assertThat(publisher.stream()).isEqualTo("s1");
+            assertThat(publisher.vhost()).isEqualTo("/");
+            assertThat(publisher.connectionName()).isNull();
+        }
+
+        @Test
+        @DisplayName("3.13 sends an empty object as an empty array, and that still parses")
+        void emptyArrayForAnEmptyObject() throws Exception {
+            // An empty Erlang property list encodes as []. A Map-typed field failed the whole
+            // list on 3.13 while 4.x, which sends {}, passed.
+            StreamConsumerInfo consumer = json.readValue("{\"connection_details\":[],"
+                    + "\"properties\":[],\"queue\":{\"name\":\"s1\",\"vhost\":\"/\"},"
+                    + "\"subscription_id\":3}", StreamConsumerInfo.class);
+
+            assertThat(consumer.connectionName()).isNull();
+            assertThat(consumer.name()).isNull();
+            assertThat(consumer.subscriptionId()).isEqualTo(3);
+        }
+
+        @Test
+        @DisplayName("a consumer's name is in its properties and its stream is a nested queue")
+        void consumer() throws Exception {
+            StreamConsumerInfo consumer = json.readValue("{\"connection_details\":{\"name\":"
+                    + "\"10.0.0.1:35819 -> 10.0.0.2:5552\",\"user\":\"guest\"},\"active\":true,"
+                    + "\"activity_status\":\"up\",\"consumed\":1,\"credits\":10,\"offset\":0,"
+                    + "\"offset_lag\":1,\"properties\":{\"name\":\"cname\"},"
+                    + "\"queue\":{\"name\":\"s1\",\"vhost\":\"/\"},\"subscription_id\":0}",
+                    StreamConsumerInfo.class);
+
+            assertThat(consumer.name()).isEqualTo("cname");
+            assertThat(consumer.stream()).isEqualTo("s1");
+            assertThat(consumer.offsetLag()).isEqualTo(1);
+            assertThat(consumer.connectionName()).isEqualTo("10.0.0.1:35819 -> 10.0.0.2:5552");
+            assertThat(consumer.active()).isTrue();
+        }
+
+        @Test
+        @DisplayName("per-node totals carry no source; per-source entries do")
+        void attempts() throws Exception {
+            AuthAttemptInfo total = json.readValue("{\"protocol\":\"http\",\"auth_attempts\":7,"
+                    + "\"auth_attempts_failed\":1,\"auth_attempts_succeeded\":6}", AuthAttemptInfo.class);
+            AuthAttemptInfo bySource = json.readValue("{\"remote_address\":\"192.168.65.1\","
+                    + "\"username\":\"bad\",\"protocol\":\"http\",\"auth_attempts\":1,"
+                    + "\"auth_attempts_failed\":1,\"auth_attempts_succeeded\":0}", AuthAttemptInfo.class);
+
+            assertThat(total.remoteAddress()).isNull();
+            assertThat(total.failed()).isEqualTo(1);
+            assertThat(total.attempts()).isEqualTo(7);
+            assertThat(bySource.username()).isEqualTo("bad");
+            assertThat(bySource.toString()).contains("bad@192.168.65.1");
+        }
+    }
 }
