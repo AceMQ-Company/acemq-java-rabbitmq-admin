@@ -18,7 +18,7 @@
   <dependency>
     <groupId>org.acemq</groupId>
     <artifactId>acemq-java-rabbitmq-admin</artifactId>
-    <version>0.1.2</version>
+    <version>0.2.0</version>
   </dependency>
 </dependencies>
 ```

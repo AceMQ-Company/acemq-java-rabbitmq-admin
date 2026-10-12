@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/AceMQ-Company/acemq-java-rabbitmq-admin/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AceMQ-Company/acemq-java-rabbitmq-admin/actions/workflows/ci.yml)
 [![authorship guard](https://github.com/AceMQ-Company/acemq-java-rabbitmq-admin/actions/workflows/attribution-guard.yml/badge.svg?branch=main)](https://github.com/AceMQ-Company/acemq-java-rabbitmq-admin/actions/workflows/attribution-guard.yml)
-[![version](https://img.shields.io/badge/version-0.1.2-blue)](https://github.com/AceMQ-Company/acemq-java-rabbitmq-admin/releases)
+[![version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/AceMQ-Company/acemq-java-rabbitmq-admin/releases)
 [![artifacts](https://img.shields.io/badge/artifacts-acemq.org%2Fmaven-blue)](https://acemq.org/maven/)
 [![docs](https://img.shields.io/badge/docs-acemq.org-blue)](https://acemq.org/acemq-java-rabbitmq-admin/)
 [![license](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
@@ -12,12 +12,11 @@
 RabbitMQ's **HTTP management API** for Java: users, vhosts, permissions,
 policies, federation, shovels — and the queue facts AMQP will not tell you.
 
-> **Status: released, 0.1.2 on [acemq.org/maven](https://acemq.org/maven/).**
+> **Status: released, 0.2.0 on [acemq.org/maven](https://acemq.org/maven/).**
 > Topology, provisioning (with passwords hashed client-side), federation and
 > shovels, health checks, connections, failed-login counters, streams, metrics,
 > alerts and definitions export/import are implemented and tested against a real
-> broker — 51 unit tests and 66 integration tests. Client-side password hashing,
-> streams, failed logins, rebalancing and extensions are on `main` for 0.2.0. See
+> broker — 51 unit tests and 66 integration tests. See
 > [what it will not do](#what-it-will-not-do) for the boundaries.
 
 ```java
