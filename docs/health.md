@@ -107,3 +107,27 @@ Passing because there is nothing to lose is a different kind of healthy from
 passing because every quorum queue has a comfortable majority. The broker says
 which, and `details()` passes it through unmodelled — the shape differs per
 check, and flattening them all into one would fit none of them.
+
+## After a rolling restart
+
+Every quorum queue and stream tends to end up led from whichever node came back
+first, and that node does most of the work.
+
+```java
+admin.rebalanceQueues();
+```
+
+This asks the broker to spread the leaders out again. It is **asynchronous**:
+the call returns once the request is accepted, and the outcome is reported only
+in the broker's log. Each leader that moves makes its queue briefly
+unavailable, so run it once after maintenance, not on a timer.
+
+## Which management plugins are enabled
+
+```java
+admin.extensions();   // [dispatcher.js, stream.js, ...]
+```
+
+The JavaScript files management plugins register with the UI. `stream.js` means
+`rabbitmq_stream_management` is enabled — which is how to tell "no stream
+publishers" from "cannot see stream publishers", since both are an empty list.

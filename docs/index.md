@@ -42,7 +42,11 @@ be reviewed.
 nowhere else, and the mechanism behind blue/green broker migration.
 
 **[Connections, channels and consumers](connections.md).** Which client is doing
-this, and the ability to disconnect one.
+this, the ability to disconnect one, and the logins that failed.
+
+**[Streams](streams.md).** Stream protocol connections, publishers and
+consumers — including the refused messages a stream publisher reports nowhere
+else.
 
 **[Health checks](health.md).** The broker's own answers, including two things
 no metric can tell you: whether a quorum queue would survive losing another

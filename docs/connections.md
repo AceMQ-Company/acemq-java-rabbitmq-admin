@@ -117,3 +117,39 @@ queue and a queue belongs to a vhost.
 ```java
 admin.forVhost("billing").consumers();
 ```
+
+Stream protocol connections, on port 5552, have [their own page](streams.md).
+
+## Failed logins
+
+A login that fails never becomes a connection, so nothing above lists it. The
+broker counts them per node:
+
+```java
+String node = admin.nodes().get(0).name();
+
+for (AuthAttemptInfo a : admin.authAttempts(node)) {
+    System.out.println(a.protocol() + ": " + a.failed() + " of " + a.attempts() + " failed");
+}
+```
+
+Which client is failing needs per-source counters, and those are **off by
+default**: every distinct address and username becomes an entry, so a scanner
+would grow the table without limit. There is no `rabbitmq.conf` key for it on
+3.13 or 4.x; it goes in `advanced.config`:
+
+```erlang
+[{rabbit, [{track_auth_attempt_source, true}]}].
+```
+
+```java
+admin.authAttemptsBySource(node).stream()
+        .filter(a -> a.failed() > 0)
+        .forEach(a -> System.out.println(a.username() + " from " + a.remoteAddress()));
+
+admin.resetAuthAttempts(node);   // both views, after the client is fixed
+```
+
+A rising failure count from one address is far more often a client deployed
+with an old password than an attack — and this is the only place either shows
+up.

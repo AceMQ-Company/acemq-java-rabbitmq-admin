@@ -28,6 +28,35 @@ billing.createUser("orders-service", "a-real-password", "monitoring");
 billing.grant("orders-service", "^orders\\..*", "^orders\\..*", "^orders\\..*");
 ```
 
+**The password never leaves your process.** `createUser` hashes it locally,
+with RabbitMQ's own salted SHA-256 — a random four-byte salt, then
+`base64(salt + sha256(salt + utf8(password)))` — and sends the broker
+`password_hash` and `hashing_algorithm`. The broker verifies logins against the
+hash exactly as if it had computed it. Before 0.2.0 the password itself went in
+the request body.
+
+A hash computed elsewhere — held in a secrets store, say — is passed as a
+`PasswordHash`:
+
+```java
+admin.createUser("orders-service", PasswordHash.of(hashFromVault, PasswordHash.SHA256));
+admin.createUser("audit", PasswordHash.sha512(secret), "monitoring");
+```
+
+The management API also offers `GET /api/auth/hash_password/{password}`. This
+library does not call it: it puts the password in a URL path, which is the part
+of a request that access logs and proxies record.
+
+Leftover accounts, and removing several at once:
+
+```java
+List<UserInfo> unused = admin.usersWithoutPermissions();   // no vhost access anywhere
+admin.deleteUsers("old-batch-1", "old-batch-2");           // one request; unknown names skipped
+```
+
+A user with no permissions cannot connect over AMQP, so no application is
+using it — though with a tag it can still log in to the management API.
+
 `grant(user, configure, write, read)` takes three regular expressions, and their
 order is the order RabbitMQ documents: **configure, write, read**. They are
 matched against resource names, not against actions, and an empty string means

@@ -112,6 +112,7 @@ NAV='<nav class="top">
   <a href="provisioning.html">Provisioning</a>
   <a href="federation.html">Federation</a>
   <a href="connections.html">Connections</a>
+  <a href="streams.html">Streams</a>
   <a href="health.html">Health</a>
   <a href="metrics.html">Metrics</a>
   <a href="alerts.html">Alerts</a>

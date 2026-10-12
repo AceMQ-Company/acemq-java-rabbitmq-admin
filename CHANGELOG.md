@@ -12,6 +12,58 @@ reasons.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-12
+
+The rest of the management API, short of `/publish` and `/get`, which stay
+refused: this library is not a second message path. Every endpoint below was
+checked against RabbitMQ 3.13.7 and 4.3.6, and the integration suite for them
+runs on either (`-Drabbitmq.image=rabbitmq:3.13-management`).
+
+### Changed
+
+- **`createUser(name, password, tags...)` no longer sends the password.** It
+  hashes it locally with RabbitMQ's salted SHA-256 — a random four-byte salt,
+  then `base64(salt + sha256(salt + utf8(password)))` — and sends
+  `password_hash` with `hashing_algorithm: rabbit_password_hashing_sha256`. The
+  broker stores exactly that hash and verifies logins against it as if it had
+  computed it. Same signature, same outcome; the plaintext simply stops crossing
+  the wire. The management API's own `GET /api/auth/hash_password/{password}` is
+  deliberately not used: it puts the password in a URL path.
+
+### Added
+
+- **`PasswordHash`** — `sha256(password)`, `sha512(password)`, `of(hash,
+  algorithm)` for a hash held elsewhere, and `matches(password)`. Verified
+  byte-for-byte against hashes the broker produced. `toString()` omits the hash.
+  MD5 is not offered.
+- **`createUser(name, PasswordHash, tags...)`** for a precomputed hash.
+- **`deleteUsers(names...)`** — `POST /api/users/bulk-delete`. Unknown names are
+  skipped, so it is safe to repeat.
+- **`usersWithoutPermissions()`** — `GET /api/users/without-permissions`.
+- **`rebalanceQueues()`** — `POST /api/rebalance/queues`. Asynchronous: the
+  broker accepts it and reports the outcome only in its log.
+- **`extensions()`** — `GET /api/extensions`, flattened to the JavaScript file
+  names. The broker's shape is one entry per plugin, an empty array for a plugin
+  with none, and `javascript` as a string on 3.13 but sometimes an array on 4.x.
+- **Authentication attempts**: `authAttempts(node)`,
+  `authAttemptsBySource(node)` and `resetAuthAttempts(node)` — `GET` and
+  `DELETE /api/auth/attempts/{node}` and `GET .../source`, as `AuthAttemptInfo`.
+  The per-source view is empty unless `track_auth_attempt_source` is set, and
+  that setting has no `rabbitmq.conf` key on 3.13 or 4.x — it goes in
+  `advanced.config`. The `DELETE` resets both views.
+- **Streams**, with `rabbitmq_stream_management`: `streamConnections()`,
+  `streamPublishers()`, `streamPublishers(stream)` and `streamConsumers()`, as
+  `StreamConnectionInfo`, `StreamPublisherInfo` and `StreamConsumerInfo`.
+  Without the plugin each answers an empty list. There is no per-stream consumer
+  endpoint (`/api/stream/consumers/{vhost}/{stream}` answers 400 on both
+  series). Entries appear on the broker's statistics interval, five seconds by
+  default, and 3.13 sends an empty `connection_details` as `[]` rather than
+  `{}` — both parse.
+- Docs: a [streams](docs/streams.md) page; failed logins in
+  [connections](docs/connections.md); rebalancing and extensions in
+  [health](docs/health.md); hashed passwords, bulk delete and leftover users in
+  [provisioning](docs/provisioning.md).
+
 ## [0.1.2] - 2026-10-04
 
 ### Security

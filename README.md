@@ -12,10 +12,11 @@
 RabbitMQ's **HTTP management API** for Java: users, vhosts, permissions,
 policies, federation, shovels — and the queue facts AMQP will not tell you.
 
-> **Status: working, unreleased.** Topology, provisioning, federation and
-> shovels, health checks, connections, metrics, alerts and definitions
-> export/import are implemented and tested against a real broker — 41 unit tests
-> and 57 integration tests. Nothing is published anywhere yet. See
+> **Status: working, unreleased.** Topology, provisioning (with passwords hashed
+> client-side), federation and shovels, health checks, connections, failed-login
+> counters, streams, metrics, alerts and definitions export/import are
+> implemented and tested against a real broker — 51 unit tests and 66
+> integration tests. Nothing is published anywhere yet. See
 > [what it will not do](#what-it-will-not-do) for the boundaries.
 
 ```java
@@ -66,6 +67,13 @@ already:
 Users, vhosts, permissions, policies. The things a team does by hand in the
 management UI, done as code that can be reviewed, and applied the way
 `Topology` is: computed, printed, and only then applied.
+
+`createUser` hashes the password locally — RabbitMQ's salted SHA-256, the same
+bytes the broker would compute — and sends only `password_hash` and
+`hashing_algorithm`, so the password itself never crosses the wire.
+`PasswordHash` takes a hash from a secrets store instead. `deleteUsers(...)`
+removes several in one request, and `usersWithoutPermissions()` lists the
+accounts no application can be using.
 
 ### 3. Moving messages between brokers
 
@@ -143,6 +151,14 @@ could never be answered with *no*.
 this", and `closeConnection(name, reason)` disconnects one. A channel holding its
 entire prefetch unacknowledged is a consumer that has stopped, and from the
 queue's side that is indistinguishable from one that is merely slow.
+
+`authAttempts(node)` and `authAttemptsBySource(node)` count the logins that
+failed, which never become connections and so appear nowhere else.
+`streamConnections()`, `streamPublishers()` and `streamConsumers()` cover the
+stream protocol on port 5552 (with `rabbitmq_stream_management`), including the
+`errored()` count of messages a stream publisher had refused.
+`rebalanceQueues()` spreads queue leaders after a rolling restart, and
+`extensions()` lists the management plugins the API can see.
 
 ### 6. Backup
 
